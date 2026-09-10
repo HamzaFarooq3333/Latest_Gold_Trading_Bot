@@ -1,0 +1,1725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>__DESK_TITLE__ — MT5 live</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a222d; --line: #2a3544; --text: #e7ecf3;
+    --muted: #8b98a8; --ok: #3d9a6a; --warn: #e0b35a; --bad: #c45c5c;
+    --accent: #c4a35a; --amber: #e6a23c; --xt: #7ec8ff;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+    --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+    background-image:
+      radial-gradient(900px 420px at 8% -8%, rgba(196,163,90,.12), transparent 55%),
+      radial-gradient(700px 320px at 100% 0%, rgba(74,143,191,.08), transparent 50%);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+    background: rgba(20,27,36,.92); position: sticky; top: 0; z-index: 20;
+  }
+  h1 { margin: 0; font-size: 1.1rem; letter-spacing: .04em; }
+  h1 span { color: var(--accent); font-weight: 500; }
+  .muted { color: var(--muted); }
+  .status { display: flex; gap: .5rem; flex-wrap: wrap; font-family: var(--mono); font-size: .75rem; align-items: center; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: .22rem .65rem; background: var(--panel); }
+  .pill.on { border-color: #2a6b4f; color: var(--ok); }
+  .pill.off { border-color: #6b2a2a; color: var(--bad); }
+  .pill.warn { border-color: #6b5a2a; color: var(--warn); }
+  main { display: grid; grid-template-columns: 1.5fr 1fr; gap: 1rem; padding: 1rem 1.25rem 2rem; }
+  @media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; }
+  .card h2 { margin: 0 0 .7rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+  .span2 { grid-column: 1 / -1; }
+  .metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: .6rem; }
+  @media (max-width: 900px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+  .metric { background: #0f1620; border: 1px solid var(--line); border-radius: 8px; padding: .65rem; }
+  .metric .lbl { font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .metric .val { font-family: var(--mono); font-size: 1.1rem; margin-top: .3rem; }
+  .val.up { color: var(--ok); } .val.down { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+  th, td { text-align: left; padding: .4rem .35rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: .65rem; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: #141b24; }
+  td { font-family: var(--mono); }
+  .scroll { max-height: 280px; overflow: auto; }
+  .scroll.tall { max-height: 420px; }
+  .buy { color: var(--ok); } .sell { color: var(--bad); } .amber { color: var(--amber); }
+  .kind-PRIMARY { color: var(--accent); } .kind-SUPP { color: var(--warn); }
+  button {
+    background: #1c2836; color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: .4rem .75rem; cursor: pointer;
+  }
+  button.danger { border-color: #6b2a2a; color: var(--bad); }
+  button.danger:hover { background: #2a1515; }
+  a.lab { color: var(--accent); text-decoration: none; font-size: .85rem; }
+  .row-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .55rem; }
+  .legend { font-size: .72rem; color: var(--muted); margin: .2rem 0 .55rem; }
+  #tvWrap { position: relative; width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #0b1016; }
+  #tvChart { width: 100%; height: 100%; }
+  #ohlcBox {
+    position: absolute; left: 10px; top: 8px; z-index: 5;
+    font-family: var(--mono); font-size: .78rem; color: var(--text);
+    background: rgba(12,17,23,.82); border: 1px solid var(--line); border-radius: 6px;
+    padding: .45rem .65rem; pointer-events: none; min-width: 280px;
+  }
+  #ohlcBox .k { color: var(--muted); }
+  .pnl-panel {
+    margin-top: .75rem; padding: .65rem .75rem;
+    border: 1px solid var(--line); border-radius: 8px; background: #0f1620;
+  }
+  .pnl-panel h3 {
+    margin: 0 0 .5rem; font-size: .68rem; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted);
+  }
+  .pnl-readout {
+    display: flex; flex-wrap: wrap; gap: .45rem .85rem; font-family: var(--mono); font-size: .78rem;
+    margin-bottom: .55rem; padding: .45rem .6rem;
+    background: rgba(12,17,23,.82); border: 1px solid var(--line); border-radius: 6px;
+  }
+  .pnl-readout .k { color: var(--muted); }
+  .pnl-charts { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
+  @media (max-width: 900px) { .pnl-charts { grid-template-columns: 1fr; } }
+  .pnl-chart-wrap {
+    position: relative; height: 150px; border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden; background: #0b1016;
+  }
+  .pnl-chart-wrap .lbl {
+    position: absolute; left: 8px; top: 6px; z-index: 2; font-size: .65rem;
+    text-transform: uppercase; letter-spacing: .08em; color: var(--muted); pointer-events: none;
+  }
+  .pnl-chart { width: 100%; height: 100%; }
+  .pnl-empty { padding: 1rem; text-align: center; color: var(--muted); font-size: .82rem; }
+  .why { white-space: normal; max-width: 520px; line-height: 1.35; color: #b7c4d4; font-size: .74rem; }
+  .tabs { display: flex; gap: .35rem; margin-bottom: .6rem; }
+  .tabs button.on { border-color: var(--accent); color: var(--accent); }
+  .note {
+    background: #0f1620; border: 1px solid var(--line); border-radius: 8px;
+    padding: .7rem .85rem; font-size: .82rem; line-height: 1.45; color: #b7c4d4; margin-bottom: .8rem;
+  }
+  .note strong { color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>__DESK_TITLE__ <span>· Exness MT5 · XAUUSDm</span></h1>
+    <div class="muted" style="font-size:.8rem;margin-top:.2rem">
+      Live MT5 chart · Heikin-Ashi signals + X-Trend + histogram · live account P/L · per-bar trade reasons
+    </div>
+  </div>
+  <div class="status">
+    <span id="bridgePill" class="pill off">BRIDGE —</span>
+    <span id="acctPill" class="pill warn">ACCOUNT —</span>
+    <span id="symPill" class="pill">SYMBOL —</span>
+    <span id="tradePill" class="pill warn">TRADING MODE —</span>
+    <span id="execPill" class="pill warn">EXECUTION —</span>
+    <span id="valuePill" class="pill warn">VALUES —</span>
+    <span id="sessPill" class="pill">MT5 LIVE FEED —</span>
+    <span id="feedPill" class="pill warn">FEED —</span>
+    <a class="lab" href="/" target="_blank">Lab UI →</a>
+  </div>
+</header>
+<main>
+  <section class="card span2">
+    <h2>__DESK_TITLE__ — live MT5</h2>
+    <div class="metrics">
+      <div class="metric"><div class="lbl">Live feed</div><div class="val" id="mFeed" style="font-size:.8rem">—</div></div>
+      <div class="metric"><div class="lbl">Bid / Ask</div><div class="val" id="mTick" style="font-size:.85rem">—</div></div>
+      <div class="metric"><div class="lbl">Login</div><div class="val" id="mLogin">—</div></div>
+      <div class="metric"><div class="lbl">Balance</div><div class="val" id="mBal">—</div></div>
+      <div class="metric"><div class="lbl">Equity</div><div class="val" id="mEq">—</div></div>
+      <div class="metric"><div class="lbl">Floating P/L</div><div class="val" id="mFloat">—</div></div>
+      <div class="metric"><div class="lbl">MT5 session P/L</div><div class="val" id="mNet">—</div></div>
+      <div class="metric"><div class="lbl">Margin / Free</div><div class="val" id="mMargin" style="font-size:.95rem">—</div></div>
+      <div class="metric"><div class="lbl">Open units</div><div class="val" id="mUnits">—</div></div>
+      <div class="metric"><div class="lbl">Server</div><div class="val" id="mServer" style="font-size:.9rem">—</div></div>
+      <div class="metric"><div class="lbl">Current HA O / H</div><div class="val" id="mOH" style="font-size:.85rem">—</div></div>
+      <div class="metric"><div class="lbl">Current HA L / C</div><div class="val" id="mLC" style="font-size:.85rem">—</div></div>
+      <div class="metric"><div class="lbl">Current X-Trend</div><div class="val" id="mXt">—</div></div>
+      <div class="metric"><div class="lbl">Current histogram</div><div class="val" id="mHist">—</div></div>
+      <div class="metric"><div class="lbl">Current bar / status</div><div class="val" id="mBar" style="font-size:.8rem">—</div></div>
+      <div class="metric"><div class="lbl">Last closed / engine</div><div class="val" id="mLastClosed" style="font-size:.8rem">—</div></div>
+      <div class="metric"><div class="lbl">Trading mode</div><div class="val" id="mTrade">—</div></div>
+      <div class="metric"><div class="lbl">Indicator value source</div><div class="val" id="mValues" style="font-size:.8rem">—</div></div>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <div class="note">
+      <strong>__DESK_TITLE__</strong> — engine follows the Demo/Asim histogram rules:
+      <strong>1)</strong> amber/orange arms the run (and flattens open positions);
+      <strong>2)</strong> <strong>primary</strong>: next green/red must <strong>break the previous body</strong> and sit <strong>clear of X-Trend</strong>;
+      <strong>3)</strong> <strong>SUPP</strong>: only needs a <strong>wick break of the last trade candle</strong> (no XT check);
+      <strong>4)</strong> trail every candle (<strong>1.0 pt</strong>, never tighter than broker min ~0.30), entry-bar stop deferred, spread <strong>0.06</strong>.
+      Reference: <strong id="btRef">$500 start → +$15,597.79 net · 78.60% win · 4,561 closed</strong>.
+      Chart = MT5 live M15. Indicator source: <strong id="sourceNote">waiting for heartbeat</strong>.
+      Each bar’s <strong>Why</strong> column explains why a trade was taken or skipped.
+    </div>
+    <div class="row-actions">
+      <h2 style="margin:0;flex:1">XAUUSDm M15 — MT5 live chart</h2>
+      <button type="button" id="btnFit">Fit content</button>
+      <button type="button" id="btnDlBars">Download bars CSV</button>
+      <button type="button" id="btnDlTrades">Download trades CSV</button>
+      <button type="button" id="btnReset" class="danger">Clear desk cache</button>
+    </div>
+    <div class="legend">
+      Fresh raw MT5 candles · warm-up/sample candles are hidden ·
+      <strong>execution = closed MT5 M15 signal bar</strong> · chart clock is <strong>UTC</strong> (same as Exness MT5 bar times) ·
+      <strong>arrows only</strong> (no exit circles) · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
+    </div>
+    <div id="tvWrap">
+      <div id="ohlcBox">Hover a candle…</div>
+      <div id="tvChart"></div>
+    </div>
+    <div class="pnl-panel" id="pnlPanel">
+      <h3>Account flow — banked balance &amp; floating P/L</h3>
+      <div class="pnl-readout" id="pnlReadout">
+        <span><span class="k">bar</span> <span id="pnlBarTime">—</span></span>
+        <span><span class="k">banked</span> <span id="pnlBanked">—</span></span>
+        <span><span class="k">floating</span> <span id="pnlFloat">—</span></span>
+        <span><span class="k">equity</span> <span id="pnlEquity">—</span></span>
+      </div>
+      <div class="pnl-charts" id="pnlCharts">
+        <div class="pnl-chart-wrap">
+          <span class="lbl">banked balance</span>
+          <div class="pnl-chart" id="bankChart"></div>
+        </div>
+        <div class="pnl-chart-wrap">
+          <span class="lbl">floating P/L</span>
+          <div class="pnl-chart" id="floatChart"></div>
+        </div>
+      </div>
+      <div class="pnl-empty" id="pnlEmpty" style="display:none">Waiting for MT5 account snapshots…</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Open positions</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Ticket</th><th>Kind</th><th>Side</th><th>Vol</th><th>Entry</th><th>SL</th><th>P/L</th></tr></thead>
+        <tbody id="posBody"><tr><td colspan="7" class="muted">Waiting…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Equity trail (MT5 account)</h2>
+    <div id="eqChart" style="height:180px"></div>
+  </section>
+
+  <section class="card span2">
+    <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (this session)</h2>
+    <div class="row-actions" style="margin-bottom:.45rem">
+      <span class="muted" style="flex:1;font-size:.78rem">Starts empty after desk wipe / bridge fresh start.</span>
+      <button type="button" id="btnDlTrades2">Download trades CSV</button>
+    </div>
+    <div class="scroll tall">
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th><th>Side</th><th>Open</th><th>Close</th><th>Vol</th>
+            <th>Open px</th><th>Close px</th><th>P/L</th><th>Exit reason</th><th>Comment / SL</th><th>Ticket</th>
+          </tr>
+        </thead>
+        <tbody id="tradeBody"><tr><td colspan="11" class="muted">No MT5 trades found</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card span2" id="analysis">
+    <h2>Analysis (since reset)</h2>
+    <div class="metrics" id="anMetrics"></div>
+  </section>
+
+  <section class="card span2">
+    <h2>Live candles — MT5 feed</h2>
+    <div class="legend">Full live MT5 candle history for the chart. Why = rule-based reason for trade / no-trade on that bar. Trades table below is this session only.</div>
+    <div class="row-actions" style="margin-bottom:.45rem">
+      <button type="button" id="btnDlBars2">Download bars CSV</button>
+    </div>
+    <div class="scroll tall">
+      <table>
+        <thead>
+          <tr>
+            <th>Bar close</th>
+            <th>Raw O</th><th>Raw H</th><th>Raw L</th><th>Raw C</th>
+            <th>HA O</th><th>HA H</th><th>HA L</th><th>HA C</th>
+            <th>XT</th><th>Hist</th><th>Zone</th><th>Action</th><th>Why</th>
+          </tr>
+        </thead>
+        <tbody id="barBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <h2>OHLC records (raw + HA)</h2>
+    <div class="legend">Persisted OHLC snapshot from each heartbeat (newest first).</div>
+    <div class="scroll tall">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Raw O</th><th>Raw H</th><th>Raw L</th><th>Raw C</th>
+            <th>HA O</th><th>HA H</th><th>HA L</th><th>HA C</th>
+            <th>XT</th><th>Hist</th><th>Engine SL</th>
+          </tr>
+        </thead>
+        <tbody id="ohlcBody"><tr><td colspan="12" class="muted">Waiting…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <h2>Stop loss / trailing stop records</h2>
+    <div class="legend">Open-position SL + engine trail updates from the bridge.</div>
+    <div class="metrics" style="margin-bottom:.6rem">
+      <div class="metric"><div class="lbl">Engine SL now</div><div class="val" id="mEngineSl">—</div></div>
+      <div class="metric"><div class="lbl">Live lot</div><div class="val" id="mLiveLot">—</div></div>
+      <div class="metric"><div class="lbl">TSL pts (control)</div><div class="val" id="mTslPts">—</div></div>
+    </div>
+    <div class="scroll tall">
+      <table>
+        <thead>
+          <tr>
+            <th>UTC</th><th>Source</th><th>Ticket</th><th>Side</th><th>Vol</th>
+            <th>Entry</th><th>SL</th><th>TP</th><th>P/L</th><th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="slBody"><tr><td colspan="10" class="muted">Waiting…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card span2" id="liveControls">
+    <h2>Live controls — change values without restart</h2>
+    <div class="legend">
+      Saves to the GCP desk. The bridge applies them on the next poll (~2s).
+      Lot size maps to VOLUME / ASIM_MT5_LOT.
+    </div>
+    <div class="metrics" id="ctrlForm" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.5rem">
+      <label class="metric"><div class="lbl">VOLUME (lot)</div><input id="cVOLUME" type="number" step="0.01" min="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">TSL_PTS</div><input id="cTSL_PTS" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">STOP_SLIPPAGE_PTS</div><input id="cSTOP_SLIPPAGE_PTS" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">SPREAD_COST</div><input id="cSPREAD_COST" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">MAXPOS</div><input id="cMAXPOS" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">MAX_SUPP</div><input id="cMAX_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">BEST_LOT_MULT</div><input id="cBEST_LOT_MULT" type="number" step="0.1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_THRESH</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">TRAIL_EVERY_CANDLE</div>
+        <select id="cTRAIL_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label class="metric"><div class="lbl">DISABLE_STOP_LOSS</div>
+        <select id="cDISABLE_STOP_LOSS" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label class="metric"><div class="lbl">XTREND_GATE (primary)</div>
+        <select id="cXTREND_GATE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label class="metric"><div class="lbl">TRAIL_ENTRY_BAR</div>
+        <select id="cTRAIL_ENTRY_BAR" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label class="metric"><div class="lbl">XTREND_GATE_SUPP</div>
+        <select id="cXTREND_GATE_SUPP" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="false">false — wick break only</option>
+          <option value="true">true — SUPP must clear XT</option>
+        </select>
+      </label>
+    </div>
+    <div class="row-actions" style="margin-top:.7rem">
+      <button type="button" id="btnSaveControls">Save live controls</button>
+      <span class="muted" id="ctrlStatus">—</span>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <h2>Logs</h2>
+    <div class="tabs">
+      <button type="button" class="on" id="tabHb">Bridge heartbeats</button>
+      <button type="button" id="tabDeals">Raw deals</button>
+      <button type="button" id="tabExec">Execution audit</button>
+    </div>
+    <div class="scroll tall" id="logHb">
+      <table>
+        <thead><tr><th>UTC</th><th>Host</th><th>Action</th><th>Bar</th><th>Note</th></tr></thead>
+        <tbody id="hbBody"></tbody>
+      </table>
+    </div>
+    <div class="scroll tall" id="logDeals" style="display:none">
+      <table>
+        <thead><tr><th>Time</th><th>Side</th><th>Entry</th><th>Price</th><th>P/L</th><th>Kind</th><th>Comment</th></tr></thead>
+        <tbody id="dealBody"></tbody>
+      </table>
+    </div>
+    <div class="scroll tall" id="logExec" style="display:none">
+      <table>
+        <thead><tr><th>Time</th><th>Bar</th><th>Action</th><th>Status</th><th>Results</th><th>Note</th></tr></thead>
+        <tbody id="execBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const DESK_TITLE = "__DESK_TITLE__";
+const EXPECTED_LOGIN = "__EXPECTED_MT5_LOGIN__";
+const EXPECTED_SYMBOL = "__EXPECTED_MT5_SYMBOL__";
+const $ = (id) => document.getElementById(id);
+function fmt(n, d=2) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
+  return Number(n).toFixed(d);
+}
+function money(n) {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  return (v >= 0 ? "$" : "-$") + Math.abs(v).toFixed(2);
+}
+function clsPnL(n) {
+  const v = Number(n);
+  return v > 0 ? "up" : v < 0 ? "down" : "";
+}
+function exitReason(trade) {
+  if (trade && trade.exit_reason) return String(trade.exit_reason).replaceAll("_", " ");
+  const text = String(trade && trade.sl_comment || "").toLowerCase();
+  if (text.includes("onyxion-exit")) return "ORANGE HISTOGRAM EXIT";
+  if (text.includes("partial-stop")) return "SUPPLEMENTARY STOP";
+  if (text.includes("[sl")) return "BROKER STOP";
+  return trade && trade.close_time ? "MT5 CLOSE" : "OPEN";
+}
+function csvEscape(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadTextFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function humanWhy(codeOrText, bar) {
+  const raw = String(codeOrText || bar?.decisionReason || bar?.why || "").trim();
+  if (!raw || raw === "—") return "No decision recorded for this bar yet.";
+  // Already human (engine explain_decision output)
+  if (/\s/.test(raw) && !/^[A-Z0-9_]+$/.test(raw)) return raw;
+  const code = raw.toUpperCase();
+  const z = String(bar?.zone || bar?.histcolor || "").toLowerCase();
+  const hist = bar?.hist != null ? Number(bar.hist).toFixed(2) : "—";
+  const xt = bar?.xtrend != null ? Number(bar.xtrend).toFixed(3) : "—";
+  const map = {
+    SKIP_WEEKEND_MARKET_CLOSED: "No trade — weekend market closed.",
+    WAITING_FOR_AMBER_ARM: `No trade — hist ${hist} (${z || "—"}) but not amber-armed yet. Need amber after last primary before next entry.`,
+    AMBER_ARM_OR_FLAT: `No new entry — amber/orange hist ${hist} arms the engine and flattens open runs.`,
+    SKIP_PRIMARY_PREVIOUS_BODY_GATE: `No primary — hist ${hist} (${z}) did not break the previous candle body.`,
+    SKIP_SUPPLEMENTARY_PREVIOUS_BODY_GATE: `No SUPP — hist ${hist} (${z}) did not break the previous candle body.`,
+    SKIP_PRIMARY_XTREND_GATE: `No primary — candle not clear of X-Trend (${xt}).`,
+    SKIP_SUPPLEMENTARY_XTREND_GATE: `No SUPP — candle not clear of X-Trend (${xt}).`,
+    SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_BUY: "No BUY SUPP — close did not progress above last trade candle close.",
+    SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_SELL: "No SELL SUPP — close did not progress below last trade candle close.",
+    REJECTED_LOCAL_RISK_OR_MAXPOS: "No trade — margin/risk or max positions blocked the entry.",
+    REJECTED_MAX_SUPPLEMENTARY_POSITIONS: "No SUPP — already at max supplementary positions.",
+    ORANGE_HISTOGRAM_EXIT: "Exit — amber/orange histogram flattened the open run.",
+    HOLDING_MANAGE_TRAIL: "Holding open unit(s); managing trail/stops — no new entry this bar.",
+    NO_ENTRY_SIGNAL: `No trade — hist ${hist} (${z || "—"}). No valid body-break + XT-clear entry.`,
+    NO_ACTION: `No trade — hist ${hist} (${z || "—"}). No valid body-break + XT-clear entry.`,
+  };
+  if (code.startsWith("STOP_EXIT_")) return `Stop exit — ${code.replace("STOP_EXIT_", "")} unit(s) hit stop on this bar.`;
+  if (code.startsWith("ENTRY_FILLED_")) {
+    const side = code.replace("ENTRY_FILLED_", "");
+    return `Trade taken — filled ${side}. Hist ${hist} (${z}); amber armed; previous-body break + XT clear passed.`;
+  }
+  if (code.startsWith("SKIP_WORST_HOUR_")) return `No trade — worst-hour filter blocked UTC-4 hour ${code.replace("SKIP_WORST_HOUR_", "")}.`;
+  return map[code] || raw.replaceAll("_", " ");
+}
+function flagOn(v, fallback=true) {
+  if (v === null || v === undefined) return fallback;
+  return v === true || v === 1 || String(v).toLowerCase() === "true";
+}
+function toUnix(ts) {
+  if (!ts) return null;
+  if (typeof ts === "number" && Number.isFinite(ts)) {
+    return ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
+  }
+  const t = Date.parse(ts);
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+}
+function toBarUnix(ts) {
+  const t = toUnix(ts);
+  if (t == null) return null;
+  // Snap to M15 open in UTC — same grid MT5 uses for bar open times.
+  return Math.floor(t / 900) * 900;
+}
+function fmtUtc(ts) {
+  const u = toUnix(ts);
+  if (u == null) return "—";
+  return new Date(u * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+function utcTickMark(time) {
+  const u = typeof time === "number" ? time : toUnix(time);
+  if (u == null) return "";
+  const d = new Date(u * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  // Prefer HH:MM on the axis so it matches the MT5 chart clock (Exness = UTC).
+  return `${mo}-${dd} ${hh}:${mm}`;
+}
+
+let chart, candleSeries, xtSeries, histSeries, slSeries, eqChart, eqSeries;
+let bankChart, floatChart, bankSeries, floatSeries;
+let lastBars = [];
+let lastTrades = [];
+let lastSlTrail = [];
+let lastPnLByTime = new Map();
+let pnlSyncing = false;
+let accountTrail = [];
+let chartReady = false;
+let sessionStartMs = null;
+
+function initCharts() {
+  if (typeof LightweightCharts === "undefined") {
+    console.error("LightweightCharts CDN failed to load");
+    chartReady = false;
+    return;
+  }
+  const el = $("tvChart");
+  if (!el) return;
+  // Destroy previous chart if re-init after a failed first paint (width 0).
+  if (chart) {
+    try { chart.remove(); } catch (_) {}
+    chart = null;
+  }
+  const width = Math.max(el.clientWidth || el.parentElement?.clientWidth || 800, 320);
+  const height = Math.max(el.clientHeight || 520, 320);
+  chart = LightweightCharts.createChart(el, {
+    layout: {
+      background: { color: "#0b1016" },
+      textColor: "#8090a4",
+      fontFamily: "IBM Plex Mono, Consolas, monospace",
+    },
+    grid: {
+      vertLines: { color: "#1a2430" },
+      horzLines: { color: "#1a2430" },
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: "#243041", autoScale: true },
+    // UTC axis — same period labels as MT5 (Exness broker time = UTC).
+    localization: {
+      locale: "en-GB",
+      timeFormatter: (t) => fmtUtc(t),
+    },
+    timeScale: {
+      borderColor: "#243041",
+      timeVisible: true,
+      secondsVisible: false,
+      rightOffset: 4,
+      tickMarkFormatter: (time) => utcTickMark(time),
+    },
+    // Allow left/right AND up/down pan + zoom (mouse wheel / drag price axis).
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
+    handleScale: {
+      axisPressedMouseMove: { time: true, price: true },
+      axisDoubleClickReset: true,
+      mouseWheel: true,
+      pinch: true,
+    },
+    kineticScroll: { mouse: true, touch: true },
+    width,
+    height,
+  });
+
+  candleSeries = chart.addCandlestickSeries({
+    upColor: "#3ecf8e",
+    downColor: "#ef6b6b",
+    borderUpColor: "#3ecf8e",
+    borderDownColor: "#ef6b6b",
+    wickUpColor: "#3ecf8e",
+    wickDownColor: "#ef6b6b",
+  });
+  xtSeries = chart.addLineSeries({
+    color: "#ff6422",
+    lineWidth: 2,
+    title: "X-Trend",
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  slSeries = chart.addLineSeries({
+    color: "#d46bff",
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Dotted,
+    title: "Trail SL",
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  });
+  histSeries = chart.addHistogramSeries({
+    priceScaleId: "hist",
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  chart.priceScale("hist").applyOptions({
+    scaleMargins: { top: 0.78, bottom: 0 },
+  });
+  chart.priceScale("right").applyOptions({
+    scaleMargins: { top: 0.05, bottom: 0.28 },
+  });
+
+  chart.subscribeCrosshairMove((param) => {
+    const box = $("ohlcBox");
+    if (!param || !param.time) {
+      if (lastBars.length) showBarOhlc(lastBars[lastBars.length - 1]);
+      syncPnLFromTv(param);
+      return;
+    }
+    const bar = lastBars.find(b => toUnix(b.time) === param.time);
+    if (bar) showBarOhlc(bar);
+    syncPnLFromTv(param);
+  });
+
+  chart.timeScale().subscribeVisibleLogicalRangeChange(syncPnLTimeRange);
+
+  eqChart = LightweightCharts.createChart($("eqChart"), {
+    layout: { background: { color: "#141b24" }, textColor: "#8090a4" },
+    grid: { vertLines: { visible: false }, horzLines: { color: "#1a2430" } },
+    rightPriceScale: { borderVisible: false },
+    timeScale: { borderVisible: false, visible: false },
+    width: $("eqChart").clientWidth,
+    height: 180,
+  });
+  eqSeries = eqChart.addAreaSeries({
+    lineColor: "#5b9fd4",
+    topColor: "rgba(91,159,212,0.35)",
+    bottomColor: "rgba(91,159,212,0.02)",
+    lineWidth: 2,
+  });
+
+  const pnlBaseOpts = {
+    layout: { background: { color: "#0b1016" }, textColor: "#8090a4", fontFamily: "IBM Plex Mono, Consolas, monospace" },
+    grid: { vertLines: { color: "#1a2430" }, horzLines: { color: "#1a2430" } },
+    rightPriceScale: { borderColor: "#243041" },
+    localization: { locale: "en-GB", timeFormatter: (t) => fmtUtc(t) },
+    timeScale: {
+      borderColor: "#243041",
+      timeVisible: true,
+      secondsVisible: false,
+      tickMarkFormatter: (time) => utcTickMark(time),
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: false,
+    handleScale: false,
+  };
+  bankChart = LightweightCharts.createChart($("bankChart"), { ...pnlBaseOpts, width: $("bankChart").clientWidth, height: 150 });
+  floatChart = LightweightCharts.createChart($("floatChart"), { ...pnlBaseOpts, width: $("floatChart").clientWidth, height: 150 });
+  bankSeries = bankChart.addAreaSeries({
+    lineColor: "#4a8fbf", topColor: "rgba(74,143,191,0.35)", bottomColor: "rgba(74,143,191,0.02)", lineWidth: 2,
+    priceLineVisible: false, lastValueVisible: true,
+  });
+  floatSeries = floatChart.addLineSeries({
+    color: "#7cbc6e", lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+  });
+  const onPnlCrosshair = (param, source) => {
+    if (pnlSyncing || !param || param.time == null) return;
+    const snap = lastPnLByTime.get(param.time);
+    if (!snap) return;
+    pnlSyncing = true;
+    updatePnLReadout(snap);
+    if (source !== "bank" && bankChart) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
+    if (source !== "float" && floatChart) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+    if (source !== "tv" && chart) chart.setCrosshairPosition(undefined, param.time, candleSeries);
+    pnlSyncing = false;
+  };
+  bankChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "bank"));
+  floatChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "float"));
+
+  window.addEventListener("resize", () => {
+    chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    eqChart.applyOptions({ width: $("eqChart").clientWidth });
+    if (bankChart) bankChart.applyOptions({ width: $("bankChart").clientWidth, height: 150 });
+    if (floatChart) floatChart.applyOptions({ width: $("floatChart").clientWidth, height: 150 });
+  });
+  chartReady = true;
+}
+
+// Session window: after desk wipe / bridge fresh start, only show this session.
+// Falls back to "now - 7 days" if session_started_at is missing.
+function historyStartMs(broker) {
+  const fromBroker = Date.parse(broker?.session_started_at || "");
+  if (Number.isFinite(fromBroker)) {
+    sessionStartMs = fromBroker;
+    return fromBroker;
+  }
+  if (sessionStartMs != null) return sessionStartMs;
+  sessionStartMs = Date.now() - 7 * 24 * 3600 * 1000;
+  return sessionStartMs;
+}
+
+let lastAccountSnap = { profit: null, equity: null, balance: null };
+
+function showBarOhlc(b) {
+  if (!b) return;
+  const zone = b.zone || b.histcolor || "";
+  const status = b.forming ? "FORMING" : (b.chartSkipped ? "SKIPPED" : (b.action || "NONE"));
+  let pnlLines = "";
+  const barFloat = b.floating_pnl != null && Number.isFinite(Number(b.floating_pnl))
+    ? Number(b.floating_pnl) : null;
+  const liveFloat = lastAccountSnap.profit != null && Number.isFinite(Number(lastAccountSnap.profit))
+    ? Number(lastAccountSnap.profit) : null;
+  const showFloat = liveFloat != null ? liveFloat : barFloat;
+  const showEq = lastAccountSnap.equity != null ? lastAccountSnap.equity : b.equity;
+  const showBal = lastAccountSnap.balance != null ? lastAccountSnap.balance : b.banked_balance;
+  if (showBal != null && Number.isFinite(Number(showBal))) {
+    pnlLines += `<div><span class="k">Banked</span> ${money(showBal)} &nbsp; <span class="k">Floating</span> <span class="${clsPnL(showFloat)}">${money(showFloat)}</span> &nbsp; <span class="k">Equity</span> ${money(showEq)}</div>`;
+  } else if (showFloat != null) {
+    pnlLines += `<div><span class="k">Floating</span> <span class="${clsPnL(showFloat)}">${money(showFloat)}</span></div>`;
+  }
+  $("ohlcBox").innerHTML =
+    `<div><span class="k">Bar</span> ${fmtUtc(b.time || b.time_unix)} <span class="k">${b.source || "mt5"}</span> <span class="k">tz</span> UTC (= MT5)</div>` +
+    `<div><span class="k">HA O</span> ${fmt(b.open)} &nbsp; <span class="k">H</span> ${fmt(b.high)} &nbsp; <span class="k">L</span> ${fmt(b.low)} &nbsp; <span class="k">C</span> ${fmt(b.close)}</div>` +
+    `<div><span class="k">Raw O/H/L/C</span> ${fmt(b.raw_open)} / ${fmt(b.raw_high)} / ${fmt(b.raw_low)} / ${fmt(b.raw_close)}</div>` +
+    `<div><span class="k">XT</span> ${fmt(b.xtrend)} &nbsp; <span class="k">Hist</span> ${fmt(b.hist)} <span class="${zone==='green'?'buy':zone==='red'?'sell':'amber'}">${String(zone).toUpperCase()}</span></div>` +
+    pnlLines +
+    `<div><span class="k">Action</span> ${status}${b.skipReason ? " · " + b.skipReason : ""}</div>` +
+    `<div><span class="k">Why</span> ${humanWhy(b.why || b.decisionReason, b)}</div>`;
+}
+
+function trailUnix(p) {
+  return toUnix(p.ts || p.time);
+}
+
+function normalizeAccountTrail(trail) {
+  return (trail || []).map(p => {
+    const t = trailUnix(p);
+    if (t == null) return null;
+    const balance = p.balance != null ? Number(p.balance) : null;
+    const profit = p.profit != null ? Number(p.profit) : null;
+    const equity = p.equity != null ? Number(p.equity) : (
+      balance != null && profit != null ? balance + profit : null
+    );
+    return {
+      time: t,
+      banked_balance: Number.isFinite(balance) ? balance : null,
+      floating_pnl: Number.isFinite(profit) ? profit : null,
+      equity: Number.isFinite(equity) ? equity : null,
+    };
+  }).filter(Boolean).sort((a, b) => a.time - b.time);
+}
+
+function snapshotAtTime(trail, unix) {
+  if (!trail.length || unix == null) return null;
+  let hit = null;
+  for (const p of trail) {
+    if (p.time <= unix) hit = p;
+    else break;
+  }
+  return hit;
+}
+
+function attachBarMetrics(bars, trail) {
+  return (bars || []).map(b => {
+    const t = toUnix(b.time);
+    const snap = snapshotAtTime(trail, t);
+    if (!snap) return b;
+    return {
+      ...b,
+      banked_balance: snap.banked_balance,
+      floating_pnl: snap.floating_pnl,
+      equity: snap.equity,
+    };
+  });
+}
+
+function updatePnLReadout(snap) {
+  const tEl = $("pnlBarTime");
+  const bEl = $("pnlBanked");
+  const fEl = $("pnlFloat");
+  const eEl = $("pnlEquity");
+  if (!snap) {
+    if (tEl) tEl.textContent = "—";
+    if (bEl) bEl.textContent = "—";
+    if (fEl) { fEl.textContent = "—"; fEl.className = ""; }
+    if (eEl) eEl.textContent = "—";
+    return;
+  }
+  if (tEl) tEl.textContent = snap.barLabel || "—";
+  if (bEl) bEl.textContent = money(snap.banked_balance);
+  if (fEl) {
+    fEl.textContent = money(snap.floating_pnl);
+    fEl.className = clsPnL(snap.floating_pnl);
+  }
+  if (eEl) eEl.textContent = money(snap.equity);
+}
+
+function updatePnLCharts(bars) {
+  lastPnLByTime = new Map();
+  const bankPts = [];
+  const floatPts = [];
+  let hasMetrics = false;
+  (bars || []).forEach(b => {
+    const t = toUnix(b.time);
+    if (t == null) return;
+    const hasB = b.banked_balance != null && Number.isFinite(Number(b.banked_balance));
+    const hasF = b.floating_pnl != null && Number.isFinite(Number(b.floating_pnl));
+    if (!hasB && !hasF) return;
+    hasMetrics = true;
+    const snap = {
+      time: t,
+      barLabel: (b.time || "").replace("T", " ").slice(0, 19),
+      banked_balance: hasB ? Number(b.banked_balance) : null,
+      floating_pnl: hasF ? Number(b.floating_pnl) : null,
+      equity: b.equity != null ? Number(b.equity) : (hasB && hasF ? Number(b.banked_balance) + Number(b.floating_pnl) : null),
+    };
+    lastPnLByTime.set(t, snap);
+    if (hasB) bankPts.push({ time: t, value: Number(b.banked_balance) });
+    if (hasF) floatPts.push({ time: t, value: Number(b.floating_pnl) });
+  });
+  const emptyEl = $("pnlEmpty");
+  const chartsEl = $("pnlCharts");
+  if (!hasMetrics) {
+    if (emptyEl) emptyEl.style.display = "";
+    if (chartsEl) chartsEl.style.display = "none";
+    updatePnLReadout(null);
+    if (bankSeries) bankSeries.setData([]);
+    if (floatSeries) floatSeries.setData([]);
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = "none";
+  if (chartsEl) chartsEl.style.display = "";
+  if (bankSeries) bankSeries.setData(bankPts);
+  if (floatSeries) floatSeries.setData(floatPts);
+  const lastT = bankPts.length ? bankPts[bankPts.length - 1].time : floatPts[floatPts.length - 1].time;
+  updatePnLReadout(lastPnLByTime.get(lastT));
+}
+
+function syncPnLFromTv(param) {
+  if (pnlSyncing || !chartReady) return;
+  if (!param || param.time == null) {
+    const last = [...lastPnLByTime.values()].pop();
+    updatePnLReadout(last || null);
+    if (bankChart) bankChart.clearCrosshairPosition();
+    if (floatChart) floatChart.clearCrosshairPosition();
+    return;
+  }
+  const snap = lastPnLByTime.get(param.time);
+  if (!snap) return;
+  pnlSyncing = true;
+  updatePnLReadout(snap);
+  if (bankChart && bankSeries) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
+  if (floatChart && floatSeries) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+  pnlSyncing = false;
+}
+
+function syncPnLTimeRange(range) {
+  if (pnlSyncing || !range) return;
+  pnlSyncing = true;
+  if (bankChart) bankChart.timeScale().setVisibleLogicalRange(range);
+  if (floatChart) floatChart.timeScale().setVisibleLogicalRange(range);
+  pnlSyncing = false;
+}
+
+/** Build live-desk candles from the connected MT5 terminal's M15 snapshot. */
+function barsFromMt5(bars) {
+  const by = new Map();
+  for (const r of bars || []) {
+    const time = String(r.time || "").trim();
+    if (!time) continue;
+    // Prefer raw broker OHLC for the chart; fall back to HA / open fields.
+    const rawO = firstFinite(r.raw_open, r.open, r.ha_open);
+    const rawH = firstFinite(r.raw_high, r.high, r.ha_high);
+    const rawL = firstFinite(r.raw_low, r.low, r.ha_low);
+    const rawC = firstFinite(r.raw_close, r.close, r.ha_close);
+    const haO = firstFinite(r.open, r.ha_open, rawO);
+    const haH = firstFinite(r.high, r.ha_high, rawH);
+    const haL = firstFinite(r.low, r.ha_low, rawL);
+    const haC = firstFinite(r.close, r.ha_close, rawC);
+    if ([rawO, rawH, rawL, rawC].some(v => v == null)) continue;
+    const hist = firstFinite(r.hist, 0);
+    const xtrend = firstFinite(r.xtrend, null);
+    const hv = hist == null ? 0 : hist;
+    const col = String(r.histcolor || r.zone || "").toLowerCase();
+    const zone = (col === "green" || col === "red" || col === "orange" || col === "amber")
+      ? (col === "orange" ? "amber" : col)
+      : (hv >= 10 ? "green" : hv <= -10 ? "red" : "amber");
+    const act = String(r.action || "NONE").toUpperCase();
+    const whyRaw = String(r.why || r.decision_reason || "");
+    const decisionReason = String(r.decision_reason || "");
+    let why = "—";
+    try {
+      why = humanWhy(whyRaw || decisionReason, {
+        zone, histcolor: zone, hist: hv, xtrend, decisionReason, why: whyRaw,
+      });
+    } catch (_) {
+      why = whyRaw || decisionReason || "—";
+    }
+    const chartSkipped = act === "NONE" && /\bskip(?:ped)?\b|no trade|no primary|no supp|waiting|amber/i.test(why);
+    const skipReason = chartSkipped
+      ? (/\bx-?trend|xt\b/i.test(why) ? "XT touching" : /\bweekend\b/i.test(why) ? "weekend" : /\bhour\b/i.test(why) ? "hour filter" : /\bamber\b/i.test(why) ? "amber arm" : /\bbody\b/i.test(why) ? "body gate" : "strategy skip")
+      : "";
+    // Sanitize candle geometry so Lightweight Charts never rejects the series.
+    const hi = Math.max(rawO, rawH, rawL, rawC);
+    const lo = Math.min(rawO, rawH, rawL, rawC);
+    by.set(time, {
+      time,
+      open: haO,
+      high: haH,
+      low: haL,
+      close: haC,
+      raw_open: rawO,
+      raw_high: rawH,
+      raw_low: rawL,
+      raw_close: rawC,
+      chart_open: rawO,
+      chart_high: hi,
+      chart_low: lo,
+      chart_close: rawC,
+      candle_type: r.candle_type || "HA",
+      xtrend,
+      hist: hv,
+      histcolor: zone,
+      zone,
+      sl: firstFinite(r.sl, null),
+      action: act,
+      filledAction: String(r.filled_action || "").toUpperCase(),
+      why,
+      decisionReason,
+      source: "mt5",
+      forming: Boolean(r.forming),
+      chartSkipped,
+      skipReason,
+    });
+  }
+  return [...by.values()].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+}
+
+function firstFinite() {
+  for (let i = 0; i < arguments.length; i++) {
+    const v = arguments[i];
+    if (v === null || v === undefined || v === "") continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/** OHLC audit rows use ha_* names — map them into the chart bar shape. */
+function ohlcRecordsAsBars(records) {
+  return (records || []).map(r => ({
+    time: r.time,
+    open: r.ha_open,
+    high: r.ha_high,
+    low: r.ha_low,
+    close: r.ha_close,
+    raw_open: r.raw_open,
+    raw_high: r.raw_high,
+    raw_low: r.raw_low,
+    raw_close: r.raw_close,
+    hist: r.hist,
+    xtrend: r.xtrend,
+    histcolor: r.zone || r.histcolor,
+    zone: r.zone || r.histcolor,
+    sl: r.sl,
+    action: r.action || "NONE",
+    why: r.why || r.decision_reason || "",
+    decision_reason: r.decision_reason || "",
+    forming: r.forming,
+    sl: r.sl,
+  }));
+}
+
+function mergeBarSources(broker) {
+  const fromBars = barsFromMt5(broker.bar_history || broker.bars || []);
+  const fromOhlc = barsFromMt5(ohlcRecordsAsBars(broker.ohlc_records || []));
+  if (!fromBars.length) return fromOhlc;
+  if (!fromOhlc.length) return fromBars;
+  // Prefer strategy bars; fill any missing times from OHLC records.
+  const by = new Map(fromOhlc.map(b => [b.time, b]));
+  fromBars.forEach(b => by.set(b.time, b));
+  return [...by.values()].sort((a, b) => String(a.time).localeCompare(String(b.time)));
+}
+
+/** Prefer filled trade lists; empty [] must not hide broker.trades.
+ *  Merge trade_history + trades so arrows cover every recorded fill. */
+function sessionTrades(broker) {
+  const hist = Array.isArray(broker?.trade_history) ? broker.trade_history : [];
+  const live = Array.isArray(broker?.trades) ? broker.trades : [];
+  const byKey = new Map();
+  for (const t of [...hist, ...live]) {
+    if (!t) continue;
+    const key = String(
+      t.ticket ||
+      t.position_id ||
+      `${t.open_time || ""}|${t.side || ""}|${t.open_price || ""}|${t.kind || ""}`
+    );
+    const prev = byKey.get(key);
+    if (
+      !prev ||
+      (t.close_time && !prev.close_time) ||
+      (t.profit != null && prev.profit == null) ||
+      (String(t.status || "").toLowerCase() === "closed" && String(prev.status || "").toLowerCase() !== "closed")
+    ) {
+      byKey.set(key, t);
+    }
+  }
+  return [...byKey.values()].sort((a, b) =>
+    String(a.open_time || a.time || "").localeCompare(String(b.open_time || b.time || ""))
+  );
+}
+
+let markerAnchorByTicket = new Map(); // position/ticket → locked M15 unix (never moves)
+let lastMarkerSignature = "";
+
+/** Candle unix times currently on the chart (LC markers need an exact match). */
+function candleTimeSet(barsOrCandles) {
+  const set = new Set();
+  for (const b of barsOrCandles || []) {
+    const t = typeof b.time === "number" ? b.time : toUnix(b.time);
+    if (t != null) set.add(t);
+  }
+  return set;
+}
+
+/**
+ * Resolve fill time onto a candle that actually exists in the series.
+ * Returns the exact `candles[i].time` reference — never a computed orphan time
+ * (orphan times make Lightweight Charts park the arrow on a neighbor bar).
+ */
+function resolveMarkerOnCandles(fillUnix, candles) {
+  if (fillUnix == null || !candles || !candles.length) return null;
+  const target = Math.floor(Number(fillUnix) / 900) * 900;
+  for (const c of candles) {
+    if (c.time === target) return c.time;
+  }
+  for (const c of candles) {
+    if (c.time <= fillUnix && fillUnix < c.time + 15 * 60) return c.time;
+  }
+  return null;
+}
+
+function snapMarkerTime(unixSec, bars) {
+  if (unixSec == null) return null;
+  const target = Math.floor(Number(unixSec) / 900) * 900;
+  const times = candleTimeSet(bars);
+  if (times.has(target)) return target;
+  for (const b of bars || []) {
+    const t = toUnix(b.time);
+    if (t == null) continue;
+    if (t <= unixSec && unixSec < t + 15 * 60 && times.has(t)) return t;
+  }
+  return null;
+}
+
+function enrichTradesWithLivePnl(trades, positions) {
+  const byTicket = new Map();
+  for (const p of positions || []) {
+    const keys = [p.ticket, p.position_id, p.position].filter((x) => x != null && String(x) !== "");
+    for (const k of keys) byTicket.set(String(k), p);
+  }
+  return (trades || []).map((t) => {
+    const closed = !!(t.close_time || t.exit_time || t.closed_at
+      || String(t.status || "").toLowerCase() === "closed");
+    let base = t;
+    if (!t.bar_time && t.open_time) {
+      const bu = toBarUnix(t.open_time);
+      if (bu != null) {
+        base = {
+          ...t,
+          bar_time: new Date(bu * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        };
+      }
+    }
+    if (closed) return base;
+    const keys = [t.position_id, t.ticket, t.position].filter((x) => x != null && String(x) !== "");
+    let pos = null;
+    for (const k of keys) {
+      if (byTicket.has(String(k))) { pos = byTicket.get(String(k)); break; }
+    }
+    if (pos && pos.profit != null && Number.isFinite(Number(pos.profit))) {
+      return { ...base, profit: Number(pos.profit), _live_float: true };
+    }
+    return base;
+  });
+}
+
+/**
+ * Entry arrow time: locked to the fill candle for that ticket.
+ * Never uses trade.time / close_time / last bar (those made arrows jump).
+ */
+function markerTimeForTrade(trade, candles) {
+  const ticketKey = String(
+    trade.position_id || trade.ticket || trade.position || ""
+  ).trim();
+  const series = candles || [];
+  if (ticketKey && markerAnchorByTicket.has(ticketKey)) {
+    const locked = markerAnchorByTicket.get(ticketKey);
+    const stillThere = resolveMarkerOnCandles(locked, series);
+    if (stillThere != null) return stillThere;
+  }
+  // open_time / bar_time only — never heartbeat "time" fields.
+  const fillRaw = trade.open_time || trade.bar_time || null;
+  const fillUnix = toUnix(fillRaw);
+  if (fillUnix == null) return null;
+  const resolved = resolveMarkerOnCandles(fillUnix, series);
+  if (resolved != null && ticketKey) markerAnchorByTicket.set(ticketKey, resolved);
+  return resolved;
+}
+
+function markerClockLabel(unixSec) {
+  if (unixSec == null) return "";
+  const d = new Date(unixSec * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function updateTv(bars, trades, currentBar, positions, pending) {
+  lastBars = attachBarMetrics(bars || [], accountTrail);
+  if (!chartReady) {
+    try { initCharts(); } catch (e) { console.error("chart init", e); }
+  }
+  if (!chartReady || !lastBars.length) {
+    if (currentBar) showBarOhlc(attachBarMetrics([currentBar], accountTrail)[0] || currentBar);
+    updatePnLCharts(lastBars);
+    return;
+  }
+  const candles = [];
+  const xt = [];
+  const hist = [];
+  const slLine = [];
+  lastBars.forEach(b => {
+    const t = toUnix(b.time);
+    if (t == null) return;
+    const o = +b.chart_open, h = +b.chart_high, l = +b.chart_low, c = +b.chart_close;
+    if (![o, h, l, c].every(Number.isFinite)) return;
+    candles.push({
+      time: t,
+      open: o,
+      high: Math.max(o, h, l, c),
+      low: Math.min(o, h, l, c),
+      close: c,
+    });
+    if (b.xtrend != null && Number.isFinite(+b.xtrend)) xt.push({ time: t, value: +b.xtrend });
+    const hv = Number.isFinite(+b.hist) ? +b.hist : 0;
+    const col = b.histcolor === "green" || b.zone === "green" ? "#3ecf8e"
+      : b.histcolor === "red" || b.zone === "red" ? "#ef6b6b" : "#e6a23c";
+    hist.push({ time: t, value: hv, color: col });
+    if (b.sl != null && Number.isFinite(+b.sl)) slLine.push({ time: t, value: +b.sl });
+  });
+  // Merge discrete sl_trail points (position / engine) onto the line.
+  (lastSlTrail || []).forEach(row => {
+    const t = toUnix(row.time) ?? toBarUnix(row.time);
+    const v = Number(row.sl);
+    if (t == null || !Number.isFinite(v)) return;
+    slLine.push({ time: t, value: v });
+  });
+  slLine.sort((a, b) => a.time - b.time);
+  const slDedup = [];
+  const slSeen = new Set();
+  slLine.forEach(p => {
+    if (slSeen.has(p.time)) {
+      slDedup[slDedup.length - 1] = p;
+      return;
+    }
+    slSeen.add(p.time);
+    slDedup.push(p);
+  });
+  try {
+  const keepRange = chart.timeScale().getVisibleLogicalRange();
+  const keepPrice = chart.priceScale("right").getVisibleRange && chart.priceScale("right").getVisibleRange();
+  candleSeries.setData(candles);
+  xtSeries.setData(xt);
+  histSeries.setData(hist);
+    if (slSeries) slSeries.setData(slDedup);
+    const el = $("tvChart");
+    if (chart && el && el.clientWidth > 0) {
+      chart.applyOptions({ width: el.clientWidth, height: Math.max(el.clientHeight, 520) });
+    }
+    if (candles.length && !window.__onyxFitOnce) {
+      chart.timeScale().fitContent();
+      window.__onyxFitOnce = true;
+    } else if (keepRange && candles.length) {
+      // Keep user's left/right scroll while live data refreshes.
+      try { chart.timeScale().setVisibleLogicalRange(keepRange); } catch (_) {}
+    }
+    if (keepPrice && keepPrice.from != null && keepPrice.to != null && window.__onyxFitOnce) {
+      // Keep user's up/down price zoom after first fit.
+      try {
+        chart.priceScale("right").applyOptions({ autoScale: false });
+        chart.priceScale("right").setVisibleRange(keepPrice);
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.error("chart setData", e, { candles: candles.length, xt: xt.length, hist: hist.length, sl: slDedup.length });
+  }
+
+  const markers = [];
+  const seenMarkerKeys = new Set();
+  const tradeTicketKeys = new Set();
+  const pushEntryMarker = (tr, fallbackLabel) => {
+    if (!tr) return;
+    const kind = String(tr.kind || fallbackLabel || "").toUpperCase();
+    // Allow blank kind for open MT5 positions — still show an arrow.
+    if (kind && kind !== "PRIMARY" && kind !== "SUPP" && kind !== "BUY" && kind !== "SELL") return;
+    const ticketKey = String(
+      tr.position_id || tr.ticket || tr.position || ""
+    ).trim();
+    // Anchor against the candles actually drawn — orphan times jump to neighbors.
+    const tOpen = markerTimeForTrade(tr, candles);
+    if (tOpen == null) return;
+    const sideRaw = String(tr.side || tr.type || tr.position_side || "").toUpperCase();
+    const isBuy = sideRaw === "BUY" || sideRaw === "0" || Number(tr.type) === 0;
+    const isSupp = kind === "SUPP" || fallbackLabel === "S" || fallbackLabel === "SUPP";
+    const soft = `${tOpen}|${isBuy ? "BUY" : "SELL"}|${isSupp ? "SUPP" : "PRIMARY"}`;
+    if (ticketKey && seenMarkerKeys.has("t:" + ticketKey)) return;
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    if (ticketKey) {
+      seenMarkerKeys.add("t:" + ticketKey);
+      tradeTicketKeys.add(ticketKey);
+    }
+    seenMarkerKeys.add("s:" + soft);
+    const pnl = (tr.profit == null || Number.isNaN(Number(tr.profit))) ? null : Number(tr.profit);
+    const closed = !!(tr.close_time || tr.exit_time || tr.closed_at
+      || String(tr.status || "").toLowerCase() === "closed");
+    const showPnl = pnl != null;
+    const clock = markerClockLabel(tOpen);
+    // Round live float so the label doesn't jitter every heartbeat.
+    const pnlRounded = showPnl ? Math.round(pnl * 100) / 100 : null;
+    const pnlTxt = pnlRounded != null
+      ? ((pnlRounded >= 0 ? " +" : " ") + money(pnlRounded) + (closed ? "" : " live"))
+      : (closed ? "" : " OPEN");
+    const color = isSupp
+      ? "#49a5ff"
+      : (pnlRounded != null ? (pnlRounded >= 0 ? "#3ecf8e" : "#ef6b6b") : (isBuy ? "#3ecf8e" : "#ef6b6b"));
+    markers.push({
+      time: tOpen,
+      position: isBuy ? "belowBar" : "aboveBar",
+      color,
+      shape: isBuy ? "arrowUp" : "arrowDown",
+      text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + (clock ? (" " + clock) : "") + pnlTxt,
+    });
+  };
+  (trades || []).forEach(tr => {
+    pushEntryMarker(tr);
+  });
+  // Open positions are often already in trades as status=open — do not double-draw.
+  (positions || []).forEach(p => {
+    const ticketKey = String(p?.position_id || p?.ticket || p?.position || "").trim();
+    if (ticketKey && tradeTicketKeys.has(ticketKey)) return;
+    if (ticketKey && seenMarkerKeys.has("t:" + ticketKey)) return;
+    pushEntryMarker(p, p.kind || "PRIMARY");
+  });
+  // Bars annotated PRIMARY/SUPP BUY|SELL — only if no trade marker already covers that bar.
+  (lastBars || []).forEach((b) => {
+    const act = String(b.action || b.filledAction || "").toUpperCase();
+    const m = act.match(/\b(PRIMARY|SUPP)\s+(BUY|SELL)\b/);
+    if (!m) return;
+    const tOpen = resolveMarkerOnCandles(toUnix(b.time), candles);
+    if (tOpen == null) return;
+    const isBuy = m[2] === "BUY";
+    const isSupp = m[1] === "SUPP";
+    const soft = `${tOpen}|${isBuy ? "BUY" : "SELL"}|${isSupp ? "SUPP" : "PRIMARY"}`;
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    // Prefer real fills over bar-annotation ghosts when any trade already marked.
+    if (tradeTicketKeys.size > 0) return;
+    seenMarkerKeys.add("s:" + soft);
+    const clock = markerClockLabel(tOpen);
+    markers.push({
+      time: tOpen,
+      position: isBuy ? "belowBar" : "aboveBar",
+      color: isSupp ? "#49a5ff" : (isBuy ? "#3ecf8e" : "#ef6b6b"),
+      shape: isBuy ? "arrowUp" : "arrowDown",
+      text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + (clock ? (" " + clock) : ""),
+    });
+  });
+  const pendingAction = String((pending || {}).action || "").toUpperCase();
+  if (pendingAction === "BUY_ADD" || pendingAction === "SELL_ADD") {
+    const pendingTime = resolveMarkerOnCandles(toBarUnix((pending || {}).bar_time), candles);
+    if (pendingTime != null) {
+      const soft = `${pendingTime}|${pendingAction === "BUY_ADD" ? "BUY" : "SELL"}|SUPP`;
+      if (!seenMarkerKeys.has("s:" + soft)) {
+        seenMarkerKeys.add("s:" + soft);
+        markers.push({
+          time: pendingTime,
+          position: pendingAction === "BUY_ADD" ? "belowBar" : "aboveBar",
+          color: "#49a5ff",
+          shape: pendingAction === "BUY_ADD" ? "arrowUp" : "arrowDown",
+          text: "SUPP " + markerClockLabel(pendingTime),
+        });
+      }
+    }
+  }
+  markers.sort((a,b) => a.time - b.time);
+  // Only rewrite markers when anchors/text actually change — stops LC jitter.
+  const sig = markers.map(m => `${m.time}|${m.text}|${m.color}|${m.shape}`).join(";");
+  try {
+    if (sig !== lastMarkerSignature) {
+      lastMarkerSignature = sig;
+      candleSeries.setMarkers(markers);
+    }
+  } catch (e) {
+    console.error("chart setMarkers", e, { markers: markers.length });
+  }
+  showBarOhlc(currentBar || lastBars[lastBars.length - 1]);
+  updatePnLCharts(lastBars);
+  syncPnLTimeRange(chart.timeScale().getVisibleLogicalRange());
+}
+
+function renderAnalysis(a, account) {
+  a = a || {};
+  account = account || {};
+  const floatPnL = account.profit != null ? Number(account.profit) : null;
+  const cells = [
+    ["Closed trades", a.closed_trades],
+    ["Win %", a.win_pct != null ? a.win_pct + "%" : "—"],
+    ["Session banked P/L", money(a.net_profit)],
+    ["Open floating P/L", floatPnL != null ? money(floatPnL) : "—"],
+    ["Profit factor", a.profit_factor ?? "—"],
+    ["Largest win", money(a.largest_win)],
+    ["Largest loss", money(a.largest_loss)],
+    ["Primary count / P/L", (a.primary_count ?? 0) + " / " + money(a.primary_pnl)],
+    ["Supp count / P/L", (a.supp_count ?? 0) + " / " + money(a.supp_pnl)],
+    ["Gross profit", money(a.gross_profit)],
+    ["Gross loss", money(a.gross_loss)],
+  ];
+  $("anMetrics").innerHTML = cells.map(([lbl, val]) => {
+    let extra = "";
+    if (lbl === "Session banked P/L") extra = " " + clsPnL(a.net_profit);
+    if (lbl === "Open floating P/L") extra = " " + clsPnL(floatPnL);
+    return `<div class="metric"><div class="lbl">${lbl}</div><div class="val${extra}">${val ?? "—"}</div></div>`;
+  }).join("");
+  // Header net = banked session closes only (open float is separate in Floating P/L).
+  $("mNet").textContent = money(a.net_profit);
+  $("mNet").className = "val " + clsPnL(a.net_profit);
+}
+
+async function resetSession() {
+  if (!confirm("Clear the live desk cache and start a fresh session?\nMT5 account balance stays as-is.")) return;
+  $("btnReset").disabled = true;
+  try {
+    const r = await fetch("/api/broker/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "reset failed");
+    sessionStartMs = Date.parse(d.session_started_at || "") || Date.now();
+    lastBars = [];
+    lastTrades = [];
+    lastSlTrail = [];
+    accountTrail = [];
+    markerAnchorByTicket = new Map();
+    lastMarkerSignature = "";
+    if (candleSeries) candleSeries.setData([]);
+    if (xtSeries) xtSeries.setData([]);
+    if (eqSeries) eqSeries.setData([]);
+    if (bankSeries) bankSeries.setData([]);
+    if (floatSeries) floatSeries.setData([]);
+    if (candleSeries) candleSeries.setMarkers([]);
+    await load();
+  } catch (e) {
+    alert("Reset failed: " + e.message);
+  } finally {
+    $("btnReset").disabled = false;
+  }
+}
+
+async function load() {
+  try {
+    const bust = Date.now();
+    const r = await fetch("/api/broker/state?t=" + bust, { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) throw new Error("state HTTP " + r.status);
+    const d = await r.json();
+    const b = d.broker || {};
+    let executionLog = [];
+    try {
+      const er = await fetch("/api/broker/executions?t=" + bust, { cache: "no-store", credentials: "same-origin" });
+      if (er.ok) executionLog = (await er.json()).execution_log || [];
+    } catch (_) {
+      executionLog = [];
+    }
+    const acct = b.account || {};
+    const age = b.heartbeat_age_sec;
+    const live = age != null && age < 20;
+    const loginOk = !EXPECTED_LOGIN || String(acct.login || "") === String(d.expected_login || EXPECTED_LOGIN);
+    const symbolOk = String(b.symbol || "") === String(d.expected_symbol || EXPECTED_SYMBOL || "XAUUSDm");
+    const bridge = b.bridge || {};
+    const mt5Online = String(bridge.mt5_connection || "").toUpperCase() === "ONLINE";
+    const mt5Bars = String(bridge.execution_source || "").toLowerCase() === "mt5_bars";
+    const tradeOn = live && loginOk && symbolOk && mt5Bars &&
+      flagOn(acct.trade_allowed) && flagOn(acct.trade_expert) &&
+      flagOn(acct.terminal_trade_allowed);
+    $("bridgePill").className = "pill " + (live ? "on" : "off");
+    $("bridgePill").textContent = live ? ("BRIDGE LIVE · " + Math.round(Number(age || 0)) + "s") : "BRIDGE OFFLINE";
+    $("acctPill").className = "pill " + (loginOk ? "on" : "warn");
+    $("acctPill").textContent = acct.login ? ("LOGIN " + acct.login) : "NO ACCOUNT";
+    $("symPill").textContent = "SYM " + (b.symbol || "—");
+    $("tradePill").className = "pill " + (tradeOn ? "on" : "off");
+    $("tradePill").textContent = tradeOn ? "TRADING MODE ON" : "TRADING MODE OFF";
+    $("execPill").className = "pill " + (mt5Bars ? "on" : "off");
+    $("execPill").textContent = mt5Bars ? "EXECUTION: MT5 BARS" : "EXECUTION: AWS";
+    const valueSource = String(b.values_source || "UNKNOWN").toUpperCase();
+    const terminalValues = valueSource === "MT5_TERMINAL";
+    $("valuePill").className = "pill " + (terminalValues ? "on" : "warn");
+    $("valuePill").textContent = "VALUES: " + valueSource;
+    const feedAt = b.feed_updated_at || b.values_updated_at || b.updated_at || "";
+    const feedAgeSec = feedAt ? Math.max(0, (Date.now() - Date.parse(feedAt)) / 1000) : null;
+    if ($("feedPill")) {
+      $("feedPill").className = "pill " + (live && feedAgeSec != null && feedAgeSec < 15 ? "on" : "warn");
+      $("feedPill").textContent = feedAt
+        ? ("FEED " + fmtUtc(feedAt).replace(" UTC", ""))
+        : "FEED —";
+    }
+    $("mValues").textContent = valueSource + (feedAt ? (" · " + fmtUtc(feedAt)) : "");
+    $("sourceNote").textContent = valueSource + (terminalValues ? " (authoritative MT5 publisher)" : " (Python bridge calculation)")
+      + (b.xtrend_source || bridge.xtrend_source ? (" · XT=" + (b.xtrend_source || bridge.xtrend_source)) : "")
+      + ((b.controls || {}).XTREND_SOURCE ? (" · ctrl=" + (b.controls || {}).XTREND_SOURCE) : "");
+    $("sessPill").textContent = mt5Online ? "MT5 LIVE FEED" : "MT5 OFFLINE · BRIDGE ONLINE";
+
+    $("mLogin").textContent = acct.login || "—";
+    $("mBal").textContent = money(acct.balance);
+    $("mEq").textContent = money(acct.equity);
+    const fl = Number(acct.profit);
+    $("mFloat").textContent = money(acct.profit);
+    $("mFloat").className = "val " + (fl > 0 ? "up" : fl < 0 ? "down" : "");
+    lastAccountSnap = {
+      profit: acct.profit != null ? Number(acct.profit) : null,
+      equity: acct.equity != null ? Number(acct.equity) : null,
+      balance: acct.balance != null ? Number(acct.balance) : null,
+    };
+    $("mMargin").textContent = money(acct.margin) + " / " + money(acct.margin_free);
+    $("mServer").textContent = acct.server || "—";
+    $("mUnits").textContent = String((b.positions || []).length);
+    $("mTrade").textContent = tradeOn
+      ? "ON"
+      : (!flagOn(acct.terminal_trade_allowed) ? "OFF · MT5 ALGO" : "OFF");
+    $("mTrade").className = "val " + (tradeOn ? "up" : "down");
+
+    const tickBid = firstFinite(b.tick_bid, bridge.tick_bid);
+    const tickAsk = firstFinite(b.tick_ask, bridge.tick_ask);
+    if ($("mTick")) {
+      $("mTick").textContent = (tickBid != null && tickAsk != null)
+        ? (fmt(tickBid) + " / " + fmt(tickAsk))
+        : "—";
+    }
+    if ($("mFeed")) {
+      const weekendNow = [0, 6].includes(new Date().getUTCDay());
+      const tickTs = b.tick_time || bridge.tick_time || b.server_time_utc || feedAt;
+      $("mFeed").textContent = (tickTs ? fmtUtc(tickTs) : "—")
+        + (live ? " · LIVE" : " · STALE")
+        + (weekendNow ? " · WEEKEND" : "");
+      $("mFeed").className = "val " + (live ? "up" : "down");
+    }
+
+    // Live chart + header metrics: merge strategy bars with OHLC records so
+    // TradingView never goes blank when one feed is briefly empty.
+    // Floor session start to M15 open so only the current live candle onward is shown.
+    const startMs = historyStartMs(b);
+    const barStartMs = Number.isFinite(startMs) ? Math.floor(startMs / 900000) * 900000 : startMs;
+    const allBars = mergeBarSources(b).filter((x) => {
+      const t = Date.parse(x.time || "");
+      if (!Number.isFinite(t)) return false;
+      if (x.forming) return true;
+      return t >= barStartMs;
+    });
+    lastBars = allBars;
+    lastSlTrail = (b.sl_trail || []).filter((p) => {
+      const t = Date.parse(p.time || p.ts || "");
+      return !Number.isFinite(t) || t >= barStartMs;
+    });
+    const current = allBars[allBars.length - 1] || {};
+    const lastClosed = allBars.slice().reverse().find(x => !x.forming) || {};
+    const bars = allBars;
+    accountTrail = normalizeAccountTrail(b.equity_trail || []).filter((p) => p.time * 1000 >= barStartMs);
+    const barsWithMetrics = attachBarMetrics(bars, accountTrail);
+    $("mOH").textContent = current.raw_open != null
+      ? ("RAW " + fmt(current.raw_open) + " / " + fmt(current.raw_high))
+      : (current.open != null ? fmt(current.open) + " / " + fmt(current.high) : "—");
+    $("mLC").textContent = current.raw_low != null
+      ? ("RAW " + fmt(current.raw_low) + " / " + fmt(current.raw_close))
+      : (current.low != null ? fmt(current.low) + " / " + fmt(current.close) : "—");
+    $("mXt").textContent = fmt(current.xtrend) + (b.xtrend_source || bridge.xtrend_source ? (" · " + (b.xtrend_source || bridge.xtrend_source)) : "");
+    $("mEngineSl").textContent = fmt(bridge.engine_sl);
+    $("mLiveLot").textContent = fmt(bridge.lot != null ? bridge.lot : (b.controls || {}).VOLUME, 2);
+    $("mTslPts").textContent = fmt((b.controls || {}).TSL_PTS);
+    fillControls(b.controls || bridge.live_controls || {});
+    const currentZone = current.zone || current.histcolor || "";
+    $("mHist").textContent = current.hist != null ? (fmt(current.hist) + " " + currentZone.toUpperCase()) : "—";
+    $("mHist").className = "val " + (currentZone === "green" ? "up" : currentZone === "red" ? "down" : "");
+    const barAgeMin = current.time ? Math.max(0, (Date.now() - Date.parse(current.time)) / 60000) : null;
+    const weekendNote = [0, 6].includes(new Date().getUTCDay()) ? " · WEEKEND (M15 frozen until open)" : "";
+    const staleNote = (barAgeMin != null && barAgeMin > 90) ? (" · BAR " + Math.round(barAgeMin) + "m old") : "";
+    $("mBar").textContent = current.time
+      ? (current.time.replace("T", " ").slice(0, 19) + " · " +
+        (current.forming ? "FORMING" : "LAST CLOSED") + " · " +
+        (current.chartSkipped ? "SKIPPED" : (current.action || bridge.engine_action || "NONE")) +
+        weekendNote + staleNote)
+      : "waiting for MT5 live bar";
+    $("mLastClosed").textContent = lastClosed.time
+      ? (lastClosed.time.replace("T", " ").slice(0, 19) + " · " +
+        (lastClosed.action || bridge.engine_action || "NONE"))
+      : "waiting for closed MT5 bar";
+
+    const pos = b.positions || [];
+    $("posBody").innerHTML = pos.length ? pos.map(p =>
+      `<tr><td>${p.ticket}</td><td class="kind-${p.kind||'OTHER'}">${p.kind||"—"}</td><td class="${p.side==='BUY'?'buy':'sell'}">${p.side}</td><td>${fmt(p.volume,2)}</td><td>${fmt(p.price_open)}</td><td>${fmt(p.sl)}</td><td class="${p.profit>=0?'buy':'sell'}">${fmt(p.profit)}</td></tr>`
+    ).join("") : `<tr><td colspan="7" class="muted">Flat</td></tr>`;
+
+    const trades = enrichTradesWithLivePnl(sessionTrades(b).filter(t => {
+      const k = String(t.kind || "").toUpperCase();
+      if (k !== "PRIMARY" && k !== "SUPP") return false;
+      const ts = Date.parse(t.open_time || t.time || t.close_time || "");
+      // Same M15 floor as candles so same-bar fills stay visible after a wipe.
+      return Number.isFinite(ts) && ts >= barStartMs;
+    }), pos).slice().reverse();
+    lastTrades = trades;
+    $("tradeBody").innerHTML = trades.length ? trades.map(t =>
+      `<tr>
+        <td class="kind-${t.kind||'OTHER'}">${t.kind||"—"}</td>
+        <td class="${t.side==='BUY'?'buy':'sell'}">${t.side||""}</td>
+        <td>${(t.open_time||"").replace("T"," ").slice(0,19)}</td>
+        <td>${(t.close_time||"").replace("T"," ").slice(0,19) || (t._live_float ? "OPEN" : "—")}</td>
+        <td>${fmt(t.volume,2)}</td>
+        <td>${fmt(t.open_price)}</td>
+        <td>${fmt(t.close_price)}</td>
+        <td class="${Number(t.profit)>=0?'buy':'sell'}">${fmt(t.profit)}${t._live_float ? " live" : ""}</td>
+        <td>${exitReason(t)}</td>
+        <td>${t.open_comment||""}${t.sl_comment ? (" / " + t.sl_comment) : ""}</td>
+        <td>${t.ticket||t.position_id||""}</td>
+      </tr>`
+    ).join("") : `<tr><td colspan="11" class="muted">No MT5 trades in this session yet</td></tr>`;
+
+    $("barBody").innerHTML = allBars.length ? allBars.slice().reverse().map(x =>
+      `<tr>
+        <td>${(x.time||"").replace("T"," ").slice(0,19)}</td>
+        <td>${fmt(x.raw_open)}</td><td>${fmt(x.raw_high)}</td><td>${fmt(x.raw_low)}</td><td>${fmt(x.raw_close)}</td>
+        <td>${fmt(x.open)}</td><td>${fmt(x.high)}</td><td>${fmt(x.low)}</td><td>${fmt(x.close)}</td>
+        <td>${fmt(x.xtrend)}</td>
+        <td class="${(x.zone||x.histcolor)==='green'?'buy':(x.zone||x.histcolor)==='red'?'sell':'amber'}">${fmt(x.hist)}</td>
+        <td>${x.zone||x.histcolor||""}</td>
+        <td>${x.chartSkipped ? "SKIPPED" : (x.action||"NONE")}</td>
+        <td class="why">${humanWhy(x.why || x.decisionReason, x)}</td>
+      </tr>`
+    ).join("") : `<tr><td colspan="14" class="muted">No MT5 bars yet — waiting for the bridge heartbeat</td></tr>`;
+
+    const ohlc = (b.ohlc_records || []).filter((x) => {
+      const t = Date.parse(x.time || "");
+      return !Number.isFinite(t) || t >= barStartMs || x.forming;
+    }).slice().reverse();
+    $("ohlcBody").innerHTML = ohlc.length ? ohlc.map(x =>
+      `<tr>
+        <td>${(x.time||"").replace("T"," ").slice(0,19)}</td>
+        <td>${fmt(x.raw_open)}</td><td>${fmt(x.raw_high)}</td><td>${fmt(x.raw_low)}</td><td>${fmt(x.raw_close)}</td>
+        <td>${fmt(x.ha_open)}</td><td>${fmt(x.ha_high)}</td><td>${fmt(x.ha_low)}</td><td>${fmt(x.ha_close)}</td>
+        <td>${fmt(x.xtrend)}</td><td>${fmt(x.hist)}</td><td>${fmt(x.sl)}</td>
+      </tr>`
+    ).join("") : `<tr><td colspan="12" class="muted">No OHLC records yet</td></tr>`;
+
+    const sls = lastSlTrail.slice().reverse();
+    $("slBody").innerHTML = sls.length ? sls.map(x =>
+      `<tr>
+        <td>${(x.time||"").replace("T"," ").slice(0,19)}</td>
+        <td>${x.source||"—"}</td>
+        <td>${x.ticket||"—"}</td>
+        <td class="${x.side==='BUY'?'buy':x.side==='SELL'?'sell':''}">${x.side||"—"}</td>
+        <td>${fmt(x.volume,2)}</td>
+        <td>${fmt(x.price_open)}</td>
+        <td>${fmt(x.sl)}</td>
+        <td>${fmt(x.tp)}</td>
+        <td class="${Number(x.profit)>=0?'buy':'sell'}">${fmt(x.profit)}</td>
+        <td>${x.sl_changed ? "TRAIL UPDATE" : (x.kind||"")}</td>
+      </tr>`
+    ).join("") : `<tr><td colspan="10" class="muted">No stop-loss records yet</td></tr>`;
+
+    const hbs = b.heartbeats || [];
+    $("hbBody").innerHTML = hbs.length ? hbs.slice().reverse().slice(0, 50).map(h =>
+      `<tr><td>${h.ts||h.time||""}</td><td>${h.host||""}</td><td>${h.lab_action||""}</td><td>${h.bar_time||""}</td><td>${h.note||""}</td></tr>`
+    ).join("") : `<tr><td colspan="5" class="muted">No heartbeats</td></tr>`;
+
+    const deals = (b.orders || []).slice().reverse().slice(0, 80).filter(o => {
+      const k = String(o.kind || "").toUpperCase();
+      return k === "PRIMARY" || k === "SUPP";
+    });
+    $("dealBody").innerHTML = deals.length ? deals.map(o => {
+      const kindLabel = String(o.kind || "").toUpperCase() === "SUPP" ? "SUPPLEMENTARY" : "PRIMARY";
+      const role = String(o.deal_role || (Number(o.entry) === 1 ? "SL/EXIT" : "OPEN")).toUpperCase();
+      const shown = Number(o.entry) === 1 ? `${kindLabel} · ${role}` : kindLabel;
+      return `<tr><td>${(o.time||"").replace("T"," ").slice(0,19)}</td><td>${o.side||""}</td><td>${o.entry}</td><td>${fmt(o.price)}</td><td class="${Number(o.profit)>=0?'buy':'sell'}">${fmt(o.profit)}</td><td class="kind-${o.kind||'PRIMARY'}">${shown}</td><td>${o.comment||""}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">No PRIMARY/SUPP deals</td></tr>`;
+    $("execBody").innerHTML = executionLog.length ? executionLog.slice().reverse().slice(0, 80).map(x =>
+      `<tr><td>${(x.time||"").replace("T"," ").slice(0,19)}</td><td>${(x.bar_time||"").replace("T"," ").slice(0,19) || "—"}</td><td>${x.action||"NONE"}</td><td class="${x.ok ? "buy" : "sell"}">${x.ok ? "OK" : "FAILED"}</td><td>${(x.results||[]).map(y => `${y.ok ? "OK" : "FAIL"} ${y.retcode ?? ""} ${y.comment || y.error || ""}`).join("<br>") || "—"}</td><td>${x.note||""}</td></tr>`
+    ).join("") : `<tr><td colspan="6" class="muted">No execution audit records</td></tr>`;
+
+    updateTv(barsWithMetrics, trades, attachBarMetrics([current], accountTrail)[0] || current, pos, {
+      action: bridge.pending_action,
+      bar_time: bridge.pending_bar_time,
+    });
+    const trail = accountTrail.map(p => ({ time: p.time, value: p.equity })).filter(p => p.value != null);
+    // lightweight-charts needs unique ascending times
+    const dedup = [];
+    const seen = new Set();
+    trail.forEach(p => { if (!seen.has(p.time)) { seen.add(p.time); dedup.push(p); } });
+    if (eqSeries && dedup.length) eqSeries.setData(dedup);
+
+    renderAnalysis(b.analysis || {}, acct);
+  } catch (e) {
+    $("bridgePill").className = "pill off";
+    $("bridgePill").textContent = "LOAD ERROR";
+    if ($("feedPill")) {
+      $("feedPill").className = "pill off";
+      $("feedPill").textContent = "FEED ERROR";
+    }
+    console.error(e);
+  }
+}
+
+$("btnReset").onclick = resetSession;
+$("btnFit").onclick = () => {
+  if (!chart) return;
+  try {
+    chart.priceScale("right").applyOptions({ autoScale: true });
+    chart.timeScale().fitContent();
+  } catch (_) {}
+};
+
+function downloadBarsCsv() {
+  const rows = lastBars || [];
+  const header = [
+    "time","action","why","decision_reason","zone","hist","xtrend",
+    "raw_open","raw_high","raw_low","raw_close","ha_open","ha_high","ha_low","ha_close"
+  ];
+  const lines = [header.join(",")];
+  rows.forEach(b => {
+    lines.push([
+      b.time, b.action, humanWhy(b.why || b.decisionReason, b), b.decisionReason,
+      b.zone || b.histcolor, b.hist, b.xtrend,
+      b.raw_open, b.raw_high, b.raw_low, b.raw_close,
+      b.open, b.high, b.low, b.close,
+    ].map(csvEscape).join(","));
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const name = (DESK_TITLE || "desk").toLowerCase().replace(/[^a-z0-9]+/g, "_") + `_bars_${stamp}.csv`;
+  downloadTextFile(name, lines.join("\n"));
+}
+
+function downloadTradesCsv() {
+  const rows = lastTrades || [];
+  const header = [
+    "kind","side","open_time","close_time","volume","open_price","close_price","profit","exit_reason","comment","ticket"
+  ];
+  const lines = [header.join(",")];
+  rows.forEach(t => {
+    lines.push([
+      t.kind, t.side, t.open_time, t.close_time, t.volume, t.open_price, t.close_price,
+      t.profit, exitReason(t), `${t.open_comment || ""} ${t.sl_comment || ""}`.trim(),
+      t.ticket || t.position_id || "",
+    ].map(csvEscape).join(","));
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const name = (DESK_TITLE || "desk").toLowerCase().replace(/[^a-z0-9]+/g, "_") + `_trades_${stamp}.csv`;
+  downloadTextFile(name, lines.join("\n"));
+}
+
+["btnDlBars", "btnDlBars2"].forEach(id => { const el = $(id); if (el) el.onclick = downloadBarsCsv; });
+["btnDlTrades", "btnDlTrades2"].forEach(id => { const el = $(id); if (el) el.onclick = downloadTradesCsv; });
+
+$("tabHb").onclick = () => {
+  $("tabHb").className = "on"; $("tabDeals").className = ""; $("tabExec").className = "";
+  $("logHb").style.display = ""; $("logDeals").style.display = "none"; $("logExec").style.display = "none";
+};
+$("tabDeals").onclick = () => {
+  $("tabDeals").className = "on"; $("tabHb").className = ""; $("tabExec").className = "";
+  $("logDeals").style.display = ""; $("logHb").style.display = "none"; $("logExec").style.display = "none";
+};
+$("tabExec").onclick = () => {
+  $("tabExec").className = "on"; $("tabHb").className = ""; $("tabDeals").className = "";
+  $("logExec").style.display = ""; $("logHb").style.display = "none"; $("logDeals").style.display = "none";
+};
+
+const CTRL_KEYS = [
+  "VOLUME","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
+  "BEST_LOT_MULT","HIST_THRESH","TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR",
+  "DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
+];
+const BOOL_CTRL_KEYS = new Set([
+  "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS",
+  "XTREND_GATE","XTREND_GATE_SUPP"
+]);
+
+function toBoolLabel(v) {
+  if (v === true || v === "true" || v === 1 || v === "1") return "true";
+  return "false";
+}
+function fromBoolLabel(v) {
+  return (v === true || v === "true" || v === 1 || v === "1") ? 1 : 0;
+}
+
+function fillControls(controls) {
+  CTRL_KEYS.forEach(k => {
+    const el = $("c" + k);
+    if (!el) return;
+    if (controls[k] === undefined || controls[k] === null) return;
+    if (document.activeElement === el) return;
+    el.value = BOOL_CTRL_KEYS.has(k) ? toBoolLabel(controls[k]) : controls[k];
+  });
+}
+$("btnSaveControls").onclick = async () => {
+  const payload = {};
+  CTRL_KEYS.forEach(k => {
+    const el = $("c" + k);
+    if (!el) return;
+    if (BOOL_CTRL_KEYS.has(k)) {
+      payload[k] = fromBoolLabel(el.value);
+      return;
+    }
+    const n = Number(el.value);
+    payload[k] = Number.isFinite(n) ? n : el.value;
+  });
+  $("ctrlStatus").textContent = "Saving…";
+  try {
+    const r = await fetch("/api/broker/controls", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ controls: payload, updated_by: "live_dashboard" }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+    fillControls(j.controls || payload);
+    $("ctrlStatus").textContent = "Saved " + new Date().toISOString().slice(11, 19) + " UTC";
+  } catch (e) {
+    $("ctrlStatus").textContent = "Save failed: " + e.message;
+  }
+};
+
+try {
+initCharts();
+} catch (e) {
+  console.error("initial chart init failed", e);
+  chartReady = false;
+}
+load();
+setInterval(load, 2500);
+</script>
+</body>
+</html>

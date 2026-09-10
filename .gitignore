@@ -1,0 +1,8 @@
+﻿**/__pycache__/
+**/*.pyc
+**/*.pyo
+Ali PC Deployment/dist/
+**/suggested_logic_backtest_results.json
+.env
+**/.env
+**/state/

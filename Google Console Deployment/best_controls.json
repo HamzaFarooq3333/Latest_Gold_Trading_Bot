@@ -1,0 +1,12 @@
+{
+  "VOLUME": 0.01,
+  "TSL_PTS": 11.02,
+  "BROKER_MIN_STOP_PTS": 0.30,
+  "TRAIL_EVERY_CANDLE": 1,
+  "ENTRY_BAR_MODE": "defer",
+  "STOP_SLIPPAGE_PTS": 0,
+  "DISABLE_STOP_LOSS": 0,
+  "XTREND_GATE": 1,
+  "XTREND_SOURCE": "supertrend",
+  "SKIP_WEEKENDS": 0
+}

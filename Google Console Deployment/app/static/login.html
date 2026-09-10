@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>__DESK_TITLE__ — Sign in</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a222d; --line: #2a3544; --text: #e7ecf3;
+    --muted: #8b98a8; --accent: #c4a35a; --bad: #c45c5c;
+    --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: var(--bg); color: var(--text); font-family: var(--sans);
+    background-image:
+      radial-gradient(900px 420px at 8% -8%, rgba(196,163,90,.12), transparent 55%),
+      radial-gradient(700px 320px at 100% 0%, rgba(74,143,191,.08), transparent 50%);
+  }
+  .card {
+    width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 1.75rem 1.5rem 1.5rem;
+  }
+  h1 { margin: 0 0 .35rem; font-size: 1.25rem; letter-spacing: .04em; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--muted); font-size: .88rem; margin-bottom: 1.25rem; }
+  label { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: .35rem; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: .65rem .75rem; margin-bottom: 1rem;
+    background: #0f1620; border: 1px solid var(--line); border-radius: 8px;
+    color: var(--text); font-size: .95rem;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: .5rem; margin-bottom: 1.1rem; }
+  .row label.inline { margin: 0; text-transform: none; letter-spacing: 0; color: var(--text); font-size: .88rem; cursor: pointer; }
+  button {
+    width: 100%; padding: .7rem; border-radius: 8px; border: 1px solid #3d3420;
+    background: linear-gradient(180deg, #3a3020, #2a2418); color: var(--accent);
+    font-weight: 600; cursor: pointer; font-size: .95rem;
+  }
+  button:hover { filter: brightness(1.08); }
+  .err { color: var(--bad); font-size: .85rem; min-height: 1.2rem; margin-bottom: .5rem; }
+  .hint { margin-top: 1rem; font-size: .78rem; color: var(--muted); line-height: 1.45; }
+  .hint code { font-family: var(--mono); color: #b7c4d4; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>__DESK_TITLE__</h1>
+  <p class="sub">Sign in to open this live MT5 desk.</p>
+  <div id="err" class="err"></div>
+  <form id="loginForm">
+    <label for="user">Username</label>
+    <input id="user" name="username" type="text" autocomplete="username" required/>
+    <label for="pass">Password</label>
+    <input id="pass" name="password" type="password" autocomplete="current-password" required/>
+    <div class="row">
+      <input id="remember" name="remember" type="checkbox"/>
+      <label class="inline" for="remember">Remember me on this device</label>
+    </div>
+    <button type="submit">Sign in</button>
+  </form>
+  <p class="hint">HTTPS uses a self-signed certificate — your browser may show a privacy warning once. Accept it to continue, or use the SSH tunnel script in the deployment folder.</p>
+</div>
+<script>
+(function () {
+  const STORAGE_USER = "asim_remember_user";
+  const STORAGE_REMEMBER = "asim_remember_checked";
+  const params = new URLSearchParams(location.search);
+  const next = params.get("next") || "/live";
+
+  const savedUser = localStorage.getItem(STORAGE_USER);
+  const savedRemember = localStorage.getItem(STORAGE_REMEMBER) === "1";
+  if (savedUser) document.getElementById("user").value = savedUser;
+  document.getElementById("remember").checked = savedRemember;
+
+  document.getElementById("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("err");
+    err.textContent = "";
+    const username = document.getElementById("user").value.trim();
+    const password = document.getElementById("pass").value;
+    const remember = document.getElementById("remember").checked;
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ username, password, remember }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        err.textContent = data.detail || data.error || "Sign in failed";
+        return;
+      }
+      if (remember) {
+        localStorage.setItem(STORAGE_USER, username);
+        localStorage.setItem(STORAGE_REMEMBER, "1");
+      } else {
+        localStorage.removeItem(STORAGE_USER);
+        localStorage.setItem(STORAGE_REMEMBER, "0");
+      }
+      location.href = next.startsWith("/") ? next : "/live";
+    } catch (ex) {
+      err.textContent = "Network error — check connection or certificate warning.";
+    }
+  });
+})();
+</script>
+</body>
+</html>

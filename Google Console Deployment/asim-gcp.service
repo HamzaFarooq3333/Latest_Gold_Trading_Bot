@@ -1,0 +1,20 @@
+[Unit]
+Description=Asim GCP Live Desk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__DEPLOY_USER__
+WorkingDirectory=/opt/asim-gcp
+EnvironmentFile=-/opt/asim-gcp/.env
+Environment=PORT=8080
+Environment=STATE_FILE=/opt/asim-gcp/data/engine_state.json
+Environment=GCP_STORE_DIR=/opt/asim-gcp/data
+Environment=BEHIND_HTTPS=1
+ExecStart=/opt/asim-gcp/venv/bin/python -m uvicorn gcp_main:app --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

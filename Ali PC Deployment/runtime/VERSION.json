@@ -1,0 +1,7 @@
+﻿{
+  "version": "ali-pc-candle-safe-autoupdate-2026-09-10-2315",
+  "built_utc": "2026-09-10T18:15:00Z",
+  "engine": "Candle-safe auto-update: wait M15 close, skip next bar entries, preserve state/SL, never flatten on deploy",
+  "live_desk": "https://35.253.21.246",
+  "notes": "See Ali PC Deployment/ALI_PC_APPLY_UPDATE.md"
+}
