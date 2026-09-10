@@ -169,6 +169,11 @@ def apply_live_controls(cfg: dict) -> None:
     mapped = {
         "VOLUME": ("lot", float),
         "TSL_PTS": None,
+        # Percentage trailing stop (0.25 = 0.25%). Must be pulled from the desk
+        # like every other control: values the desk serves overwrite .env each
+        # cycle, so a key missing from this map cannot be changed from the
+        # dashboard and would silently keep whatever .env happened to hold.
+        "TSL_PCT": None,
         "BROKER_MIN_STOP_PTS": None,
         "STOP_SLIPPAGE_PTS": None,
         "SPREAD_COST": None,
