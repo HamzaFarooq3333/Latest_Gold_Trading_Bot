@@ -1,7 +1,7 @@
 {
-  "version": "ali-pc-tick-trail-close-2026-09-11-2045",
-  "built_utc": "2026-09-11T16:45:00Z",
-  "engine": "Trailing SL = 1111 ticks. Trails the bar CLOSE, not the bar extreme: trailing the extreme puts the stop on the wrong side of the market (broker-invalid) and inflates backtests.",
+  "version": "ali-pc-every-candle-atr-stop-2026-09-11-1840",
+  "built_utc": "2026-09-11T18:40:00Z",
+  "engine": "Walk-forward selected strategy. ENTRY_EVERY_CANDLE=1: primary gate (body-break AND X-Trend clear) on every green/red candle, stacking to MAXPOS, no SUPP. TSL_ATR_MULT=1.25: stop = 1.25 x Wilder ATR(14) raw M15 at entry. HIST_THRESH=15. hist_color now reads HIST_THRESH at call time.",
   "live_desk": "https://35.253.21.246",
-  "notes": "Backtest report: backtest_report.html"
+  "notes": "Validation: Feb-May optimise, Jun-Aug blind. IS->OOS corr 0.87; recommended OOS +11,746 PF 2.02. Regime-dependent - see strategy_report.html. Original 1111-tick rules were ruined on the same data."
 }
