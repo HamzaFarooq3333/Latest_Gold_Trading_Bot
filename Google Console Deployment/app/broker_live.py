@@ -27,6 +27,9 @@ def _default_controls() -> dict:
     return {
         "VOLUME": 0.01,
         "TSL_PTS": 0.25,
+        "TSL_PCT": 0.25,
+        "TSL_TICKS": 1111,
+        "TSL_TICK_SIZE": 0.001,
         "BROKER_MIN_STOP_PTS": 0.30,
         "STOP_SLIPPAGE_PTS": 0,
         "SPREAD_COST": 0.06,
@@ -504,6 +507,9 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
         allowed = {
             "VOLUME",
             "TSL_PTS",
+            "TSL_PCT",
+            "TSL_TICKS",
+            "TSL_TICK_SIZE",
             "BROKER_MIN_STOP_PTS",
             "STOP_SLIPPAGE_PTS",
             "SPREAD_COST",

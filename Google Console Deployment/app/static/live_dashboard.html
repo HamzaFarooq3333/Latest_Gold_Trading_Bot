@@ -307,6 +307,8 @@
     </div>
     <div class="metrics" id="ctrlForm" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.5rem">
       <label class="metric"><div class="lbl">VOLUME (lot)</div><input id="cVOLUME" type="number" step="0.01" min="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">TSL_TICKS</div><input id="cTSL_TICKS" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">TSL_TICK_SIZE</div><input id="cTSL_TICK_SIZE" type="number" step="0.001" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">TSL_PTS</div><input id="cTSL_PTS" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">STOP_SLIPPAGE_PTS</div><input id="cSTOP_SLIPPAGE_PTS" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">SPREAD_COST</div><input id="cSPREAD_COST" type="number" step="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
@@ -1215,13 +1217,13 @@ function updateTv(bars, trades, currentBar, positions, pending) {
     const color = isSupp
       ? "#49a5ff"
       : (pnlRounded != null ? (pnlRounded >= 0 ? "#3ecf8e" : "#ef6b6b") : (isBuy ? "#3ecf8e" : "#ef6b6b"));
-    markers.push({
-      time: tOpen,
-      position: isBuy ? "belowBar" : "aboveBar",
+      markers.push({
+        time: tOpen,
+        position: isBuy ? "belowBar" : "aboveBar",
       color,
-      shape: isBuy ? "arrowUp" : "arrowDown",
+        shape: isBuy ? "arrowUp" : "arrowDown",
       text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + (clock ? (" " + clock) : "") + pnlTxt,
-    });
+      });
   };
   (trades || []).forEach(tr => {
     pushEntryMarker(tr);
@@ -1263,13 +1265,13 @@ function updateTv(bars, trades, currentBar, positions, pending) {
       const soft = `${pendingTime}|${pendingAction === "BUY_ADD" ? "BUY" : "SELL"}|SUPP`;
       if (!seenMarkerKeys.has("s:" + soft)) {
         seenMarkerKeys.add("s:" + soft);
-        markers.push({
-          time: pendingTime,
-          position: pendingAction === "BUY_ADD" ? "belowBar" : "aboveBar",
-          color: "#49a5ff",
-          shape: pendingAction === "BUY_ADD" ? "arrowUp" : "arrowDown",
+      markers.push({
+        time: pendingTime,
+        position: pendingAction === "BUY_ADD" ? "belowBar" : "aboveBar",
+        color: "#49a5ff",
+        shape: pendingAction === "BUY_ADD" ? "arrowUp" : "arrowDown",
           text: "SUPP " + markerClockLabel(pendingTime),
-        });
+      });
       }
     }
   }
@@ -1279,7 +1281,7 @@ function updateTv(bars, trades, currentBar, positions, pending) {
   try {
     if (sig !== lastMarkerSignature) {
       lastMarkerSignature = sig;
-      candleSeries.setMarkers(markers);
+  candleSeries.setMarkers(markers);
     }
   } catch (e) {
     console.error("chart setMarkers", e, { markers: markers.length });
@@ -1658,7 +1660,7 @@ $("tabExec").onclick = () => {
 };
 
 const CTRL_KEYS = [
-  "VOLUME","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
+  "VOLUME","TSL_TICKS","TSL_TICK_SIZE","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
   "BEST_LOT_MULT","HIST_THRESH","TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR",
   "DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
 ];

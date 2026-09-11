@@ -58,8 +58,56 @@ def _env_float(name: str, default: float) -> float:
 
 
 def effective_tsl_pts() -> float:
-    """Read TSL live so dashboard controls apply without process restart."""
+    """Read TSL live so dashboard controls apply without process restart.
+
+    NOTE: this is now used ONLY by entry-fill logic (_cross_fill). The stop
+    itself is percentage-based - see effective_tsl_pct/tsl_distance. Keeping
+    the two separate means widening the stop cannot silently move where
+    entries fill.
+    """
     return _env_float('TSL_PTS', 0.25)
+
+
+def effective_tick_size() -> float:
+    """Price value of one tick. XAUUSDm quotes 3 decimals, so 1 tick = 0.001.
+
+    Taken from the broker's trade_tick_size, not assumed: a 2-decimal feed
+    would make 1 tick 0.01 and every distance below would be 10x too big.
+    """
+    size = _env_float('TSL_TICK_SIZE', 0.001)
+    return size if size > 0 else 0.001
+
+
+def effective_tsl_ticks() -> float:
+    """Trailing stop distance in TICKS. This is the authoritative setting.
+
+    1111 ticks x 0.001 = $1.111 of gold movement. For scale: the spread is
+    about $0.26, so this sits roughly 4x spread away. It is a FIXED distance -
+    unlike the percentage stop it replaced, it does not rescale as gold moves,
+    so its meaning in percent drifts with price (~0.026% at 4325).
+
+    Read live so dashboard controls apply without a process restart.
+    """
+    ticks = _env_float('TSL_TICKS', 1111.0)
+    return ticks if ticks > 0 else 1111.0
+
+
+def effective_tsl_pct() -> float:
+    """What the tick distance works out to as a percent of `price`.
+
+    Reporting only - nothing sizes a stop from this any more. Kept so the
+    dashboard and logs can still show a percentage for comparison.
+    """
+    return _env_float('TSL_PCT', 0.25)
+
+
+def tsl_distance(price: float = 0.0) -> float:
+    """Price distance of the trailing stop, in instrument units.
+
+    Fixed tick distance, so `price` is accepted but unused; the parameter stays
+    so every existing call site keeps working unchanged.
+    """
+    return effective_tsl_ticks() * effective_tick_size()
 
 
 def effective_trail_every_candle() -> bool:
@@ -316,6 +364,11 @@ class Position:
     sl: float
     is_primary: bool
     lot: float
+    # Most favourable price this trade has seen since it opened: the high for a
+    # long, the low for a short. The trailing stop is always tsl_distance()
+    # behind it. Defaults to 0.0 so snapshots written before percentage
+    # trailing existed still restore via Position(**p); _seed_best() repairs it.
+    best_price: float = 0.0
 
 @dataclass
 class Pending:
@@ -434,16 +487,48 @@ class LatestModsEngine:
         return True
 
     def _init_sl(self, entry: float, want: int) -> float:
-        tsl = effective_tsl_pts()
+        """Opening stop: exactly tsl_distance() behind the fill."""
+        dist = tsl_distance(entry)
         if want > 0:
-            return entry - tsl
-        return entry + tsl
+            return entry - dist
+        return entry + dist
 
-    def _trail_sl(self, sl: float, close: float, side: int) -> float:
-        tsl = effective_tsl_pts()
+    def _trail_sl(self, sl: float, best: float, side: int) -> float:
+        """Stop trailing `best` (the trade's most favourable price).
+
+        max/min keeps the stop monotonic: it only ever moves toward profit, so
+        a pullback that does not breach it leaves it where it is.
+        """
+        dist = tsl_distance(best)
         if side > 0:
-            return max(sl, close - tsl)
-        return min(sl, close + tsl)
+            return max(sl, best - dist)
+        return min(sl, best + dist)
+
+    @staticmethod
+    def _seed_best(p: 'Position', side: int) -> None:
+        """Backfill best_price for tickets restored from a pre-percentage snapshot."""
+        if not p.best_price:
+            p.best_price = p.entry
+
+    def _advance_best(self, p: 'Position', close: float, side: int) -> None:
+        """Extend this trade's best price, then re-derive its stop.
+
+        Trails the bar CLOSE, not the bar high/low. Trailing the extreme looks
+        tighter but places the stop on the wrong side of the market: a long
+        whose bar spiked to 4324 and closed at 4318 would get a stop at
+        4322.889 - above the market - which the broker rejects as an invalid
+        stop, or fills immediately. The close is where price actually is when
+        the bar completes, so a stop derived from it is always valid.
+
+        Runs per position: each ticket tracks only its own excursion, so one
+        trade closing never disturbs another's trail.
+        """
+        self._seed_best(p, side)
+        if side > 0:
+            p.best_price = max(p.best_price, float(close))
+        else:
+            p.best_price = min(p.best_price, float(close))
+        p.sl = self._trail_sl(p.sl, p.best_price, side)
 
     def _active_sl(self) -> float | None:
         """The stop actually protecting the run, not just the primary's stop.
@@ -486,7 +571,7 @@ class LatestModsEngine:
             self.pos = want
             self.run_side = want
             self.seen_amber = False
-            self.positions = [Position(entry=fill_px, sl=self._init_sl(fill_px, want), is_primary=True, lot=lot)]
+            self.positions = [Position(entry=fill_px, sl=self._init_sl(fill_px, want), is_primary=True, lot=lot, best_price=fill_px)]
             self._last_fill_lot = lot
             self.balance -= SPREAD_COST
             self.break_level = signal_bl
@@ -498,7 +583,7 @@ class LatestModsEngine:
             self.last_entry_reason = 'REJECTED_MAX_SUPPLEMENTARY_POSITIONS'
             return 'HOLD'
         side = self.pos
-        self.positions.append(Position(entry=fill_px, sl=self._init_sl(fill_px, side), is_primary=False, lot=lot))
+        self.positions.append(Position(entry=fill_px, sl=self._init_sl(fill_px, side), is_primary=False, lot=lot, best_price=fill_px))
         self.break_level = signal_bl
         self.last_trade_close = trade_close
         self._last_fill_lot = lot
@@ -711,8 +796,11 @@ class LatestModsEngine:
                     self.seen_amber = True
                 else:
                     if effective_trail_every_candle():
+                        # Trail off the bar's extreme, not its close: a bar that
+                        # spikes and gives most of it back has still earned the
+                        # tighter stop.
                         for p in self.positions:
-                            p.sl = self._trail_sl(p.sl, ec, self.pos)
+                            self._advance_best(p, ec, self.pos)
                     # One entry per bar: skip SUPP if this bar already filled (e.g. deferred primary).
                     if (not just_opened
                             and zz == (1 if self.pos > 0 else -1)
@@ -787,7 +875,7 @@ class LatestModsEngine:
             # _trail_sl only ever tightens toward profit, so this cannot widen risk.
             if effective_trail_every_candle() and effective_trail_entry_bar():
                 for p in live_new:
-                    p.sl = self._trail_sl(p.sl, ec, self.pos)
+                    self._advance_best(p, ec, self.pos)
         if self._n_total() > 0 and self._mlevel(ec) < STOPOUT:
             action = self._flatten(ec)
             self.run_side = 0
@@ -831,7 +919,7 @@ class LatestModsEngine:
             trail=effective_trail_every_candle(),
             tsl=effective_tsl_pts(),
         )
-        result = {'action': action, 'why': why_text, 'decision_reason': decision_reason, 'hist': hist, 'histcolor': color, 'zone': zz, 'ha_side': ha_side(o, c), 'position': {0: 'FLAT', 1: 'LONG', -1: 'SHORT'}[self.pos], 'n_units': self._n_primary(), 'n_supp': self._n_supp(), 'n_total': self._n_total(), 'sl': active_sl, 'pending_next_open': self.pending is not None, 'run_side': self.run_side, 'seen_amber': self.seen_amber, 'break_level': self.break_level, 'last_trade_close': self.last_trade_close, 'supp_close_rule': 'buy: next candle high > last trade candle high; sell: next candle low < last trade candle low', 'supp_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'tsl_mode': 'pts_live'} for p in self.positions if not p.is_primary], 'closed_supps': closed_supps, 'closed_primary': closed_primary, 'primary_closed': primary_closed, 'sl_exits': sl_exits, 'filled_action': filled_action, 'fill_price': None if not just_opened else just_opened[-1].entry, 'sl_updated': active_sl, 'sl_changed': bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-09)), 'open_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions], 'skip_worst_hours': self.skip_worst_hours, 'focus_best_hours': self.focus_best_hours, 'best_lot_mult': BEST_LOT_MULT, 'fill_lot': getattr(self, '_last_fill_lot', DEFAULT_VOLUME), 'hour_utc4': hour, 'hour_skips': self.hour_skips, 'xt_skips': self.xt_skips, 'weekend_skips': self.weekend_skips, 'skip_weekends': SKIP_WEEKENDS, 'entry_logic': 'primary_body_xt__supp_trade_wick', 'fill_mode': 'live_quote' if execution_prices else ('prev_body_immediate' if not just_opened or just_opened[-1].is_primary else 'trade_wick_immediate'), 'close_confirm': False, 'tsl_pts': effective_tsl_pts(), 'tsl_desired': _env_float('TSL_PTS', 0.25), 'broker_min_stop_pts': _env_float('BROKER_MIN_STOP_PTS', 0.30), 'mode': 'latest_mods_primary_xt_supp_wick_025pt', 'xtrend': xtrend, 'xtrend_gate': XT_GATE, 'xtrend_gate_supp': effective_supp_xt_gate(), 'xtrend_touch_buf': XT_BUF, 'primary_wick_gate': PRIMARY_WICK_GATE, 'stop_slippage_pts': STOP_SLIPPAGE_PTS, 'stop_active_on_entry_bar': effective_entry_bar_mode() == 'test', 'entry_bar_mode': effective_entry_bar_mode(), 'trail_every_candle': effective_trail_every_candle(), 'trail_entry_bar': effective_trail_entry_bar(), 'execution_price_source': 'live_quote' if execution_prices else ('raw_ohlc' if has_raw_execution else 'signal_ohlc_fallback'), 'open': o, 'high': h, 'low': l, 'close': c, 'raw_open': eo, 'raw_high': eh, 'raw_low': el, 'raw_close': ec, 'spread_cost': SPREAD_COST, 'balance': round(self.balance, 4), 'duplicate_bar': False, 'dedupe_active': bool(bar_key), 'closed_units': ([{'kind': 'primary', **closed_primary}] if closed_primary else []) + [{'kind': 'supp', **x} for x in closed_supps], 'fill_sl': None if filled_action is None else self._init_sl(fill_px, 1 if 'BUY' in filled_action else -1), 'position_stops': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions]}
+        result = {'action': action, 'why': why_text, 'decision_reason': decision_reason, 'hist': hist, 'histcolor': color, 'zone': zz, 'ha_side': ha_side(o, c), 'position': {0: 'FLAT', 1: 'LONG', -1: 'SHORT'}[self.pos], 'n_units': self._n_primary(), 'n_supp': self._n_supp(), 'n_total': self._n_total(), 'sl': active_sl, 'pending_next_open': self.pending is not None, 'run_side': self.run_side, 'seen_amber': self.seen_amber, 'break_level': self.break_level, 'last_trade_close': self.last_trade_close, 'supp_close_rule': 'buy: next candle high > last trade candle high; sell: next candle low < last trade candle low', 'supp_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'best_price': round(p.best_price, 4), 'tsl_mode': 'ticks_live'} for p in self.positions if not p.is_primary], 'closed_supps': closed_supps, 'closed_primary': closed_primary, 'primary_closed': primary_closed, 'sl_exits': sl_exits, 'filled_action': filled_action, 'fill_price': None if not just_opened else just_opened[-1].entry, 'sl_updated': active_sl, 'sl_changed': bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-09)), 'open_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions], 'skip_worst_hours': self.skip_worst_hours, 'focus_best_hours': self.focus_best_hours, 'best_lot_mult': BEST_LOT_MULT, 'fill_lot': getattr(self, '_last_fill_lot', DEFAULT_VOLUME), 'hour_utc4': hour, 'hour_skips': self.hour_skips, 'xt_skips': self.xt_skips, 'weekend_skips': self.weekend_skips, 'skip_weekends': SKIP_WEEKENDS, 'entry_logic': 'primary_body_xt__supp_trade_wick', 'fill_mode': 'live_quote' if execution_prices else ('prev_body_immediate' if not just_opened or just_opened[-1].is_primary else 'trade_wick_immediate'), 'close_confirm': False, 'tsl_pts': effective_tsl_pts(), 'tsl_desired': _env_float('TSL_PTS', 0.25), 'tsl_ticks': effective_tsl_ticks(), 'tsl_tick_size': effective_tick_size(), 'tsl_distance': round(tsl_distance(), 4), 'tsl_pct_equiv': round(tsl_distance() / ec * 100.0, 5) if ec else None, 'tsl_mode': 'ticks', 'broker_min_stop_pts': _env_float('BROKER_MIN_STOP_PTS', 0.30), 'mode': 'latest_mods_primary_xt_supp_wick_025pt', 'xtrend': xtrend, 'xtrend_gate': XT_GATE, 'xtrend_gate_supp': effective_supp_xt_gate(), 'xtrend_touch_buf': XT_BUF, 'primary_wick_gate': PRIMARY_WICK_GATE, 'stop_slippage_pts': STOP_SLIPPAGE_PTS, 'stop_active_on_entry_bar': effective_entry_bar_mode() == 'test', 'entry_bar_mode': effective_entry_bar_mode(), 'trail_every_candle': effective_trail_every_candle(), 'trail_entry_bar': effective_trail_entry_bar(), 'execution_price_source': 'live_quote' if execution_prices else ('raw_ohlc' if has_raw_execution else 'signal_ohlc_fallback'), 'open': o, 'high': h, 'low': l, 'close': c, 'raw_open': eo, 'raw_high': eh, 'raw_low': el, 'raw_close': ec, 'spread_cost': SPREAD_COST, 'balance': round(self.balance, 4), 'duplicate_bar': False, 'dedupe_active': bool(bar_key), 'closed_units': ([{'kind': 'primary', **closed_primary}] if closed_primary else []) + [{'kind': 'supp', **x} for x in closed_supps], 'fill_sl': None if filled_action is None else self._init_sl(fill_px, 1 if 'BUY' in filled_action else -1), 'position_stops': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions]}
         if bar_key:
             self._seen_bars[bar_key] = copy.deepcopy(result)
             self._seen_bars.move_to_end(bar_key)

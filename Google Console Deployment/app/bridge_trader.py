@@ -169,6 +169,14 @@ def apply_live_controls(cfg: dict) -> None:
     mapped = {
         "VOLUME": ("lot", float),
         "TSL_PTS": None,
+        # Percentage trailing stop (0.25 = 0.25%). Must be pulled from the desk
+        # like every other control: values the desk serves overwrite .env each
+        # cycle, so a key missing from this map cannot be changed from the
+        # dashboard and would silently keep whatever .env happened to hold.
+        "TSL_PCT": None,
+        # Trailing stop in ticks - the authoritative stop setting.
+        "TSL_TICKS": None,
+        "TSL_TICK_SIZE": None,
         "BROKER_MIN_STOP_PTS": None,
         "STOP_SLIPPAGE_PTS": None,
         "SPREAD_COST": None,
@@ -1665,6 +1673,7 @@ def _should_skip_entries_for_deploy(bar_time) -> bool:
         return False
     if bar_key == skip_key:
         return True
+    # Past the skip candle — drop the marker so it cannot linger.
     if bar_key > skip_key:
         clear_deploy_skip_bar()
     return False
@@ -1863,6 +1872,7 @@ def process_local_mt5_bar(
                 "auto-update: no new entries; open positions/SL preserved "
                 "(trail/amber/exits still allowed)"
             )
+            # Consume the marker once this closed bar has been handled.
             clear_deploy_skip_bar()
             runtime["deploy_skip_bar"] = bar_key or bar.get("time")
             runtime["deploy_skip_logged"] = True
