@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Pull latest bridge bundle every 15 minutes (Windows Scheduled Task).
   Reads BRIDGE_UPDATE_URL from C:\onyxion-{profile}\.env (or git pull).

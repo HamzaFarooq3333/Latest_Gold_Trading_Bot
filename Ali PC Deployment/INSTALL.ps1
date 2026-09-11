@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Ali PC one-shot installer.
   Run in elevated PowerShell from THIS folder:

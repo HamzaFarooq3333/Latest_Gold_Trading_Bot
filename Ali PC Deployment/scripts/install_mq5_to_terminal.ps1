@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Copy Onyxion MQ5 sources into the MT5 terminal and attempt MetaEditor compile.

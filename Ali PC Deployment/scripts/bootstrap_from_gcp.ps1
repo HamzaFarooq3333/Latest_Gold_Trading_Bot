@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Bootstrap Onyxion bridge on a fresh Windows PC WITHOUT a zip file from dev.
   Downloads the live bundle from GCP BRIDGE_UPDATE_URL and installs to C:\onyxion-{profile}.

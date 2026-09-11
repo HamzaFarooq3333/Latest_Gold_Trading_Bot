@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Sync Ali PC Deployment\runtime from Google Console Deployment\app
   (keeps MT5 PC pack on the same engine logic as the live desk).

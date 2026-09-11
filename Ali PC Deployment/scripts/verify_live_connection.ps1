@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Verify Ali PC bridge is healthy and can reach the live GCP desk.
   Does not start services — use start_bridge_stack.ps1 after healthcheck PASS.

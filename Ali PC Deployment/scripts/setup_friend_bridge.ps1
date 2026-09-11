@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   One-shot setup for friend's MT5 laptop (profile ali).
   Run from repo on friend's PC after filling .env credentials.
