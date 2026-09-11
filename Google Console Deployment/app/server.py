@@ -85,19 +85,44 @@ LEVERAGE = float(os.environ.get("LEVERAGE", "100"))
 MARGIN_MIN = float(os.environ.get("MARGIN_MIN_PCT", "75")) / 100.0
 MAXPOS = int(os.environ.get("MAXPOS", "20"))
 MAX_SUPP = int(os.environ.get("MAX_SUPP", "10"))
-# Playbook A: 0.25-pt trail every closed candle.
+# Entry-fill geometry still uses TSL_PTS (live does the same). The *trailing*
+# stop distance is tick-based to match Ali live desk / mt5_live_engine.py.
 TSL_PTS = float(os.environ.get("TSL_PTS", "0.25"))
 
 
-def effective_tsl_pts() -> float:
+def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get("TSL_PTS", str(TSL_PTS)))
+        return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
-        return TSL_PTS
+        return default
+
+
+def effective_tsl_pts() -> float:
+    """Entry-fill helper only — not the live trailing distance."""
+    return _env_float("TSL_PTS", TSL_PTS)
+
+
+def effective_tick_size() -> float:
+    """Price value of one tick (XAUUSDm trade_tick_size defaults to 0.001)."""
+    size = _env_float("TSL_TICK_SIZE", 0.001)
+    return size if size > 0 else 0.001
+
+
+def effective_tsl_ticks() -> float:
+    """Authoritative trailing stop distance in ticks (live default 1111)."""
+    ticks = _env_float("TSL_TICKS", 1111.0)
+    return ticks if ticks > 0 else 1111.0
+
+
+def tsl_distance(price: float = 0.0) -> float:
+    """Trailing stop distance in price units: TSL_TICKS × TSL_TICK_SIZE."""
+    return effective_tsl_ticks() * effective_tick_size()
+
+
 # Stop orders are market orders once touched. This conservative estimate is
 # applied beyond the stop level; set to 0 only to reproduce the old perfect-fill
-# assumption.
-STOP_SLIPPAGE_PTS = float(os.environ.get("STOP_SLIPPAGE_PTS", "0.25"))
+# assumption. Live desk default is 0.
+STOP_SLIPPAGE_PTS = float(os.environ.get("STOP_SLIPPAGE_PTS", "0"))
 CONTRACT = 100.0
 STOPOUT = 0.50
 BEST_LOT_MULT = float(os.environ.get("BEST_LOT_MULT", "1.0"))
@@ -419,16 +444,17 @@ class LatestModsEngine:
         return True
 
     def _init_sl(self, entry: float, want: int) -> float:
-        tsl = effective_tsl_pts()
+        dist = tsl_distance(entry)
         if want > 0:
-            return entry - tsl
-        return entry + tsl
+            return entry - dist
+        return entry + dist
 
     def _trail_sl(self, sl: float, close: float, side: int) -> float:
-        tsl = effective_tsl_pts()
+        # Match live: trail the bar CLOSE (not the extreme), monotonic ratchet.
+        dist = tsl_distance(close)
         if side > 0:
-            return max(sl, close - tsl)
-        return min(sl, close + tsl)
+            return max(sl, close - dist)
+        return min(sl, close + dist)
 
     def _active_sl(self) -> Optional[float]:
         """The stop that is actually protecting the run right now.
@@ -843,7 +869,7 @@ class LatestModsEngine:
             "seen_amber": self.seen_amber,
             "break_level": self.break_level,
             "supp_positions": [
-                {"entry": p.entry, "sl": round(p.sl, 4), "lot": p.lot, "tsl_mode": "pts_025"}
+                {"entry": p.entry, "sl": round(p.sl, 4), "lot": p.lot, "tsl_mode": "ticks_live"}
                 for p in self.positions if not p.is_primary
             ],
             "closed_supps": closed_supps,
@@ -873,7 +899,11 @@ class LatestModsEngine:
             "fill_mode": "prev_body_immediate",
             "close_confirm": False,
             "tsl_pts": effective_tsl_pts(),
-            "mode": "playbook_a_body_xt_clear_025pt",
+            "tsl_ticks": effective_tsl_ticks(),
+            "tsl_tick_size": effective_tick_size(),
+            "tsl_distance": round(tsl_distance(), 4),
+            "tsl_mode": "ticks",
+            "mode": "playbook_a_body_xt_clear_1111tick",
             "xtrend": xtrend,
             "xtrend_gate": XT_GATE,
             "xtrend_gate_supp": XT_GATE_SUPP,
@@ -1027,6 +1057,10 @@ def health():
         "fill_mode": "prev_body_immediate",
         "close_confirm": False,
         "tsl_pts": effective_tsl_pts(),
+        "tsl_ticks": effective_tsl_ticks(),
+        "tsl_tick_size": effective_tick_size(),
+        "tsl_distance": round(tsl_distance(), 4),
+        "tsl_mode": "ticks",
         "xtrend_gate": XT_GATE,
         "xtrend_gate_supp": XT_GATE_SUPP,
         "xtrend_touch_buf": XT_BUF,

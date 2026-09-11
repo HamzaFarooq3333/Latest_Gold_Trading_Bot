@@ -593,7 +593,7 @@ Otherwise no entry — the bar is counted in "XT skips"</div>
 
         <h3>4. Stop</h3>
         <ul>
-          <li>Each candle has its own stop: after that candle closes, buy SL = max(old, close − 0.25), sell SL = min(old, close + 0.25). Start at −0.25 from fill; if price goes up the stop steps up with it.</li>
+          <li>Each candle has its own stop: after that candle closes, buy SL = max(old, close − TSL), sell SL = min(old, close + TSL). TSL = <strong>1111 ticks × 0.001</strong> (= $1.111 on XAUUSDm), matching live. Start at −TSL from fill; if price goes up the stop steps up with it.</li>
           <li>The entry candle is <strong>not</strong> stopped against its own wick. That trail becomes live on the <strong>next</strong> candle.</li>
           <li>Opposite HA does not freeze the trail. Hit: buy if candle low ≤ stop; sell if candle high ≥ stop. No take-profit.</li>
         </ul>
@@ -842,7 +842,7 @@ Otherwise no entry — the bar is counted in "XT skips"</div>
           Upload signal OHLC + X-Trend, or raw MT5 OHLC. Raw Goldm files without
           X-Trend automatically receive HA signal candles and SuperTrend X-Trend (6/0.8).
           Histogram value and colour are computed here (Plot is ignored).
-          Rules: amber first · next candle crosses previous body · fill at that body · TSL 0.25pt · amber stops the run.
+          Rules: amber first · next candle crosses previous body · fill at that body · TSL 1111 ticks · amber stops the run.
           The <b>X-Trend gate</b> and its <b>buffer</b> are both set in Testing.
           A wick within the buffer of the line counts as touching, so no entry.
         </div>
@@ -870,8 +870,8 @@ X-Trend gate (optional in Testing — live labs stay ON):
   Sell : high &lt; X-Trend − buffer
   Wick on the line → skip. Default buffer 0.00, editable in Testing.
 
-Stop   : 0.25 points from price, recalculated every 15m, ratchet only in the trade’s favour
-         (buy SL = price − 0.25 · sell SL = price + 0.25). No take-profit.
+Stop   : 1111 ticks × tick size (default 0.001 → $1.111), recalculated every 15m on the bar close,
+         ratchet only in the trade’s favour (buy SL = close − TSL · sell SL = close + TSL). No take-profit.
 Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fall under ~75%</div>
           <div class="row">
             <label>CSV file</label>
@@ -900,12 +900,14 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
       <div class="bt-sub" id="bt-testing">
         <div class="card">
           <h2>Testing</h2>
-          <div class="hint"><strong>Asim FB Agent:</strong> Histogram rules engine · amber first · next candle crosses previous <strong>body</strong> (not wick) · fill at that body (4003, not 4005), or this open on a far-side gap · <strong>X-Trend gate ON</strong> · trail every candle close · stop live from the next bar · <strong>skip-worst ON</strong> · <strong>2× best hours</strong> · TSL 0.25pt · amber stops the run.</div>
+          <div class="hint"><strong>Asim FB Agent:</strong> Histogram rules engine · amber first · next candle crosses previous <strong>body</strong> (not wick) · fill at that body (4003, not 4005), or this open on a far-side gap · <strong>X-Trend gate ON</strong> · trail every candle close · stop live from the next bar · <strong>skip-worst ON</strong> · <strong>2× best hours</strong> · TSL <strong>1111 ticks</strong> (× tick size 0.001 = $1.111, matches live) · amber stops the run.</div>
           <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="500" /></div>
           <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="100" /></div>
           <div class="row"><label>lot</label><input id="btLot" type="number" step="any" value="0.01" /></div>
           <div class="row"><label>spread (USD)</label><input id="btSpread" type="number" step="any" value="0.06" /></div>
-          <div class="row"><label>stop slippage (pt)</label><input id="btStopSlip" type="number" step="0.01" min="0" value="0.25" /><span class="hint">extra adverse fill beyond a touched stop (matches live: slipped stop only, no gap-open worse fill)</span></div>
+          <div class="row"><label>TSL ticks</label><input id="btTslTicks" type="number" step="1" min="1" value="1111" /><span class="hint">live trailing distance in ticks (Ali desk default 1111)</span></div>
+          <div class="row"><label>tick size</label><input id="btTslTickSize" type="number" step="0.001" min="0.0001" value="0.001" /><span class="hint">XAUUSDm trade_tick_size; distance = ticks × size</span></div>
+          <div class="row"><label>stop slippage (pt)</label><input id="btStopSlip" type="number" step="0.01" min="0" value="0" /><span class="hint">extra adverse fill beyond a touched stop (matches live default 0)</span></div>
           <div class="row"><label>max positions</label><input id="btMaxpos" type="number" step="1" value="20" /></div>
           <div class="row"><label>max supp</label><input id="btMaxSupp" type="number" step="1" value="10" /></div>
           <div class="row"><label>margin min %</label><input id="btMargMin" type="number" step="any" value="75" /></div>
@@ -927,8 +929,8 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
           <div class="row">
             <label>X-Trend source</label>
             <select id="btXtSourceTest" style="min-width:280px">
-              <option value="supertrend" selected>SuperTrend HA 6/0.8</option>
-              <option value="gaga">KJ GagaTrend on HA</option>
+              <option value="gaga" selected>KJ GagaTrend on HA (live Ali desk)</option>
+              <option value="supertrend">SuperTrend HA 6/0.8</option>
               <option value="file">CSV X-Trend column</option>
             </select>
             <span class="hint">Re-applies before the run so you can A/B SuperTrend vs KJ without re-uploading.</span>
@@ -972,7 +974,7 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
             <label>Previous body cross</label>
             <span class="hint">Always ON. Buy when this high exceeds the previous body (max of previous open/close). Sell when this low goes under the previous body. Previous wicks are ignored. Fill is that body level (or this open if it gapped through).</span>
           </div>
-          <div class="hint" style="margin-left:128px">TSL 0.25 points, moves with every candle close. Stop is live from the next bar — the entry wick cannot produce a −0.80. Fill = previous body on the cross candle. Arrow = that same candle.</div>
+          <div class="hint" style="margin-left:128px">TSL = 1111 ticks × 0.001 (= $1.111), moves with every candle <b>close</b> (matches live). Stop is live from the next bar — the entry wick cannot kill the fill. Fill = previous body on the cross candle. Arrow = that same candle.</div>
           <div class="row"><label>from</label><input id="btFrom" type="datetime-local" style="min-width:220px" /></div>
           <div class="row"><label>to</label><input id="btTo" type="datetime-local" style="min-width:220px" /></div>
           <div class="row">
@@ -3504,7 +3506,10 @@ Short is the mirror.</div>
       // Browser copy of LatestModsEngine.push() in server.py.
       // Primary: prev-body cross + X-Trend clear. SUPP: last-trade wick break only (no XT).
       const n = bars.length;
-      const tslPts = 0.25;
+      const tslTicks = Number.isFinite(+cfg.tslTicks) && +cfg.tslTicks > 0 ? +cfg.tslTicks : 1111;
+      const tslTickSize = Number.isFinite(+cfg.tslTickSize) && +cfg.tslTickSize > 0 ? +cfg.tslTickSize : 0.001;
+      const tslPts = tslTicks * tslTickSize; // live: 1111 × 0.001 = 1.111
+      const tslFillPts = Number.isFinite(+cfg.tslFillPts) ? +cfg.tslFillPts : 0.25; // entry-fill geometry only
       let bal = cfg.start, side = 0, alive = true;
       let positions = []; // {entry, sl, isPrimary, lot, fillIdx}
       let breakLevel = null, seenAmber = false, runSide = 0;
@@ -3612,12 +3617,12 @@ Short is the mirror.</div>
         if (want > 0) {
           const lvl = Math.max(prev.open, prev.close);
           if (b.rawOpen > lvl) return b.rawOpen;
-          if (Math.abs(b.rawLow - b.rawOpen) < 1e-9 && b.rawOpen < lvl - tslPts) return b.rawOpen;
+          if (Math.abs(b.rawLow - b.rawOpen) < 1e-9 && b.rawOpen < lvl - tslFillPts) return b.rawOpen;
           return lvl;
         }
         const lvl = Math.min(prev.open, prev.close);
         if (b.rawOpen < lvl) return b.rawOpen;
-        if (Math.abs(b.rawHigh - b.rawOpen) < 1e-9 && b.rawOpen > lvl + tslPts) return b.rawOpen;
+        if (Math.abs(b.rawHigh - b.rawOpen) < 1e-9 && b.rawOpen > lvl + tslFillPts) return b.rawOpen;
         return lvl;
       };
       // Whole candle, wick included, must sit clear of the X-Trend band (PRIMARY only).
@@ -5580,6 +5585,9 @@ Short is the mirror.</div>
             priWick: $("btPriWick") ? $("btPriWick").value === "1" : false,
             trailEveryCandle: $("btTrailEvery") ? $("btTrailEvery").value === "1" : true,
             trailEntryBar: $("btTrailEntryBar") ? $("btTrailEntryBar").value === "1" : true,
+            tslTicks: +(($("btTslTicks") && $("btTslTicks").value) || 1111),
+            tslTickSize: +(($("btTslTickSize") && $("btTslTickSize").value) || 0.001),
+            tslFillPts: 0.25,
             stopSlip: +(($("btStopSlip") && $("btStopSlip").value) || 0)
           });
           btResult.bars = slice;
