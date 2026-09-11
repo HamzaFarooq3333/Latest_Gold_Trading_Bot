@@ -177,6 +177,9 @@ def apply_live_controls(cfg: dict) -> None:
         # Trailing stop in ticks - the authoritative stop setting.
         "TSL_TICKS": None,
         "TSL_TICK_SIZE": None,
+        # ATR-sized stop multiplier and every-candle entry mode.
+        "TSL_ATR_MULT": None,
+        "ENTRY_EVERY_CANDLE": None,
         "BROKER_MIN_STOP_PTS": None,
         "STOP_SLIPPAGE_PTS": None,
         "SPREAD_COST": None,
@@ -399,7 +402,15 @@ def _ema_span(src: list[float], span: int = 5) -> list[float]:
     return out
 
 
-def hist_color(h: float, thresh: float = 10.0) -> str:
+def hist_color(h: float, thresh: float | None = None) -> str:
+    # Read HIST_THRESH at call time. The engine trusts the colour it is sent
+    # (zone_from_sent), so a threshold fixed here would silently override
+    # .env and the dashboard control no matter what they were set to.
+    if thresh is None:
+        try:
+            thresh = float(os.environ.get("HIST_THRESH", "10"))
+        except (TypeError, ValueError):
+            thresh = 10.0
     if h >= thresh:
         return "green"
     if h <= -thresh:
