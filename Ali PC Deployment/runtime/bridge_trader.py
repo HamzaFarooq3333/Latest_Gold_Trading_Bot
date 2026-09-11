@@ -174,6 +174,9 @@ def apply_live_controls(cfg: dict) -> None:
         # cycle, so a key missing from this map cannot be changed from the
         # dashboard and would silently keep whatever .env happened to hold.
         "TSL_PCT": None,
+        # Trailing stop in ticks - the authoritative stop setting.
+        "TSL_TICKS": None,
+        "TSL_TICK_SIZE": None,
         "BROKER_MIN_STOP_PTS": None,
         "STOP_SLIPPAGE_PTS": None,
         "SPREAD_COST": None,
