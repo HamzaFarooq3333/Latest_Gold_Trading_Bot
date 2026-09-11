@@ -1,7 +1,7 @@
 {
-  "version": "ali-pc-tick-trailing-sl-1111-2026-09-11-0320",
-  "built_utc": "2026-09-11T03:20:00Z",
-  "engine": "Trailing SL = 1111 ticks (TSL_TICKS x TSL_TICK_SIZE = $1.111 on XAUUSDm). Replaces the 0.25% percentage stop. Per-trade best_price, monotonic ratchet, trails bar high/low. Entry-fill still uses TSL_PTS.",
+  "version": "ali-pc-tick-trail-close-2026-09-11-2045",
+  "built_utc": "2026-09-11T16:45:00Z",
+  "engine": "Trailing SL = 1111 ticks. Trails the bar CLOSE, not the bar extreme: trailing the extreme puts the stop on the wrong side of the market (broker-invalid) and inflates backtests.",
   "live_desk": "https://35.253.21.246",
-  "notes": "Backtest (dashboard.html) NOT updated - live and backtest P/L will diverge."
+  "notes": "Backtest report: backtest_report.html"
 }

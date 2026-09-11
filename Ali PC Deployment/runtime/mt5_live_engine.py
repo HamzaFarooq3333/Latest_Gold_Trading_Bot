@@ -510,17 +510,24 @@ class LatestModsEngine:
         if not p.best_price:
             p.best_price = p.entry
 
-    def _advance_best(self, p: 'Position', eh: float, el: float, side: int) -> None:
+    def _advance_best(self, p: 'Position', close: float, side: int) -> None:
         """Extend this trade's best price, then re-derive its stop.
+
+        Trails the bar CLOSE, not the bar high/low. Trailing the extreme looks
+        tighter but places the stop on the wrong side of the market: a long
+        whose bar spiked to 4324 and closed at 4318 would get a stop at
+        4322.889 - above the market - which the broker rejects as an invalid
+        stop, or fills immediately. The close is where price actually is when
+        the bar completes, so a stop derived from it is always valid.
 
         Runs per position: each ticket tracks only its own excursion, so one
         trade closing never disturbs another's trail.
         """
         self._seed_best(p, side)
         if side > 0:
-            p.best_price = max(p.best_price, float(eh))
+            p.best_price = max(p.best_price, float(close))
         else:
-            p.best_price = min(p.best_price, float(el))
+            p.best_price = min(p.best_price, float(close))
         p.sl = self._trail_sl(p.sl, p.best_price, side)
 
     def _active_sl(self) -> float | None:
@@ -793,7 +800,7 @@ class LatestModsEngine:
                         # spikes and gives most of it back has still earned the
                         # tighter stop.
                         for p in self.positions:
-                            self._advance_best(p, eh, el, self.pos)
+                            self._advance_best(p, ec, self.pos)
                     # One entry per bar: skip SUPP if this bar already filled (e.g. deferred primary).
                     if (not just_opened
                             and zz == (1 if self.pos > 0 else -1)
@@ -868,7 +875,7 @@ class LatestModsEngine:
             # _trail_sl only ever tightens toward profit, so this cannot widen risk.
             if effective_trail_every_candle() and effective_trail_entry_bar():
                 for p in live_new:
-                    self._advance_best(p, eh, el, self.pos)
+                    self._advance_best(p, ec, self.pos)
         if self._n_total() > 0 and self._mlevel(ec) < STOPOUT:
             action = self._flatten(ec)
             self.run_side = 0
