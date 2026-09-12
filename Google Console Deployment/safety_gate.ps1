@@ -9,12 +9,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RuntimeDir = Join-Path (Split-Path -Parent $ScriptDir) "runtime"
-$Checker = Join-Path $RuntimeDir "safety_gate_check.py"
-if (-not (Test-Path $Checker)) {
-  $Checker = Join-Path $ScriptDir "safety_gate_check.py"
+$candidates = @(
+  (Join-Path $ScriptDir "app\safety_gate_check.py"),
+  (Join-Path $ScriptDir "safety_gate_check.py"),
+  (Join-Path (Split-Path -Parent $ScriptDir) "Ali PC Deployment\runtime\safety_gate_check.py"),
+  (Join-Path (Split-Path -Parent $ScriptDir) "Ali PC Deployment\scripts\safety_gate_check.py")
+)
+$Checker = $null
+foreach ($c in $candidates) {
+  if (Test-Path $c) { $Checker = $c; break }
 }
-if (-not (Test-Path $Checker)) {
+if (-not $Checker) {
   Write-Error "safety_gate_check.py not found near $ScriptDir"
   exit 1
 }
