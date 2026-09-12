@@ -104,6 +104,25 @@
     padding: .7rem .85rem; font-size: .82rem; line-height: 1.45; color: #b7c4d4; margin-bottom: .8rem;
   }
   .note strong { color: var(--text); }
+  .ali-panel {
+    display: none; margin-top: .75rem; padding: .75rem;
+    border: 1px solid var(--line); border-radius: 10px; background: #0f1620;
+  }
+  .ali-panel.open { display: block; }
+  .ali-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .55rem;
+  }
+  .ali-card {
+    background: #141b24; border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem;
+  }
+  .ali-card h3 {
+    margin: 0 0 .35rem; font-size: .65rem; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted);
+  }
+  .ali-card pre {
+    margin: 0; white-space: pre-wrap; font-family: var(--mono); font-size: .72rem; line-height: 1.35;
+  }
+  button.ali-toggle.on { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -123,6 +142,8 @@
     <span id="valuePill" class="pill warn">VALUES —</span>
     <span id="sessPill" class="pill">MT5 LIVE FEED —</span>
     <span id="feedPill" class="pill warn">FEED —</span>
+    <span id="aliPill" class="pill warn">ALI PC —</span>
+    <button type="button" class="ali-toggle" id="btnAliPc" title="Ali PC monitor">Ali PC</button>
     <a class="lab" href="/" target="_blank">Lab UI →</a>
   </div>
 </header>
@@ -148,6 +169,26 @@
       <div class="metric"><div class="lbl">Last closed / engine</div><div class="val" id="mLastClosed" style="font-size:.8rem">—</div></div>
       <div class="metric"><div class="lbl">Trading mode</div><div class="val" id="mTrade">—</div></div>
       <div class="metric"><div class="lbl">Indicator value source</div><div class="val" id="mValues" style="font-size:.8rem">—</div></div>
+    </div>
+    <div class="ali-panel" id="aliPcPanel">
+      <div class="row-actions">
+        <h2 style="margin:0;flex:1">Ali PC — GitOps monitor</h2>
+        <button type="button" id="btnForceCheck">Force GitHub check</button>
+        <button type="button" id="btnRestartStack" class="danger">Restart stack</button>
+      </div>
+      <div class="legend" id="aliAgentNote">Agent posts every ~20s. Stale &gt;90s → AGENT OFFLINE.</div>
+      <div class="ali-grid" id="aliGrid">
+        <div class="ali-card"><h3>GitHub checker</h3><pre id="aliGithub">—</pre></div>
+        <div class="ali-card"><h3>Update pipeline</h3><pre id="aliUpdate">—</pre></div>
+        <div class="ali-card"><h3>Processes</h3><pre id="aliProcs">—</pre></div>
+        <div class="ali-card"><h3>MT5 feed</h3><pre id="aliMt5">—</pre></div>
+        <div class="ali-card"><h3>Desk link</h3><pre id="aliDesk">—</pre></div>
+        <div class="ali-card"><h3>Code version</h3><pre id="aliCode">—</pre></div>
+        <div class="ali-card"><h3>Risk</h3><pre id="aliRisk">—</pre></div>
+        <div class="ali-card"><h3>Safety gate</h3><pre id="aliGate">—</pre></div>
+        <div class="ali-card"><h3>PC health</h3><pre id="aliPc">—</pre></div>
+        <div class="ali-card"><h3>Requests ack</h3><pre id="aliAck">—</pre></div>
+      </div>
     </div>
   </section>
 
@@ -1275,6 +1316,39 @@ function updateTv(bars, trades, currentBar, positions, pending) {
       }
     }
   }
+  // Deploy-skip candles: paint an X on the skipped entry bar.
+  (lastBars || []).forEach((b) => {
+    if (!b || !(b.deploy_skip === true || b.deploy_skip === 1 || b.deploy_skip === "true")) return;
+    const tOpen = resolveMarkerOnCandles(toUnix(b.time), candles);
+    if (tOpen == null) return;
+    const soft = `${tOpen}|DEPLOY_SKIP`;
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    seenMarkerKeys.add("s:" + soft);
+    markers.push({
+      time: tOpen,
+      position: "aboveBar",
+      color: "#e0b35a",
+      shape: "square",
+      text: "X skip " + markerClockLabel(tOpen),
+    });
+  });
+  const skipFromAli = (window.__aliPcSkipBar || "").trim();
+  if (skipFromAli) {
+    const tOpen = resolveMarkerOnCandles(toUnix(skipFromAli), candles);
+    if (tOpen != null) {
+      const soft = `${tOpen}|DEPLOY_SKIP`;
+      if (!seenMarkerKeys.has("s:" + soft)) {
+        seenMarkerKeys.add("s:" + soft);
+        markers.push({
+          time: tOpen,
+          position: "aboveBar",
+          color: "#e0b35a",
+          shape: "square",
+          text: "X skip " + markerClockLabel(tOpen),
+        });
+      }
+    }
+  }
   markers.sort((a,b) => a.time - b.time);
   // Only rewrite markers when anchors/text actually change — stops LC jitter.
   const sig = markers.map(m => `${m.time}|${m.text}|${m.color}|${m.shape}`).join(";");
@@ -1398,6 +1472,7 @@ async function load() {
       + (b.xtrend_source || bridge.xtrend_source ? (" · XT=" + (b.xtrend_source || bridge.xtrend_source)) : "")
       + ((b.controls || {}).XTREND_SOURCE ? (" · ctrl=" + (b.controls || {}).XTREND_SOURCE) : "");
     $("sessPill").textContent = mt5Online ? "MT5 LIVE FEED" : "MT5 OFFLINE · BRIDGE ONLINE";
+    renderAliPc(b.ali_pc || {});
 
     $("mLogin").textContent = acct.login || "—";
     $("mBal").textContent = money(acct.balance);
@@ -1604,6 +1679,85 @@ $("btnFit").onclick = () => {
     chart.timeScale().fitContent();
   } catch (_) {}
 };
+
+function pillClass(ok, warn) {
+  if (ok) return "pill on";
+  if (warn) return "pill warn";
+  return "pill off";
+}
+
+function fmtObj(obj) {
+  if (!obj || typeof obj !== "object") return "—";
+  return Object.keys(obj).map(k => {
+    const v = obj[k];
+    if (v && typeof v === "object") {
+      const bits = Object.keys(v).map(sk => `${sk}=${v[sk]}`).join(" ");
+      return `${k}: ${bits || JSON.stringify(v)}`;
+    }
+    return `${k}: ${v == null ? "—" : v}`;
+  }).join("\n") || "—";
+}
+
+function renderAliPc(ali) {
+  ali = ali || {};
+  const age = ali.age_sec;
+  const offline = !!ali.agent_offline || age == null || age > 90;
+  const behind = !!(ali.github_checker || {}).behind;
+  const upd = String((ali.update || {}).state || "idle");
+  const blocked = upd === "blocked" || String((ali.update || {}).last_result || "") === "update_blocked";
+  if ($("aliPill")) {
+    $("aliPill").className = pillClass(!offline && !blocked, !offline && (behind || upd !== "idle"));
+    $("aliPill").textContent = offline
+      ? "ALI PC · AGENT OFFLINE"
+      : (blocked ? "ALI PC · UPDATE BLOCKED" : (behind ? "ALI PC · BEHIND" : "ALI PC · OK"));
+  }
+  window.__aliPcSkipBar = ((ali.update || {}).skip_bar_time) || "";
+  const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  set("aliGithub", fmtObj(ali.github_checker));
+  set("aliUpdate", fmtObj(ali.update));
+  set("aliProcs", fmtObj(ali.processes));
+  set("aliMt5", fmtObj(ali.mt5));
+  set("aliDesk", fmtObj(ali.desk_link));
+  set("aliCode", fmtObj(ali.code));
+  set("aliRisk", fmtObj(ali.risk));
+  set("aliGate", fmtObj(ali.safety_gate));
+  set("aliPc", fmtObj(ali.pc));
+  set("aliAck", fmtObj(ali.requests_ack));
+  if ($("aliAgentNote")) {
+    $("aliAgentNote").textContent = offline
+      ? ("AGENT OFFLINE" + (age != null ? (" · last seen " + Math.round(age) + "s ago") : " · no status yet"))
+      : ("Agent live · age " + Math.round(age || 0) + "s · skip_bar=" + (window.__aliPcSkipBar || "—"));
+  }
+}
+
+async function sendAliCommand(action) {
+  const label = action === "force_check" ? "Force GitHub check" : "Restart stack";
+  if (!confirm(label + " on Ali PC?\n\nSafe queue only — will not abort an in-flight candle wait / flatten trades.")) return;
+  try {
+    const r = await fetch("/api/broker/ali_pc_command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ action, requested_by: "live_dashboard" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || ("HTTP " + r.status));
+    alert(label + " queued: " + (d.command && d.command.id ? d.command.id : "ok"));
+  } catch (e) {
+    alert(label + " failed: " + e.message);
+  }
+}
+
+if ($("btnAliPc")) {
+  $("btnAliPc").onclick = () => {
+    const panel = $("aliPcPanel");
+    if (!panel) return;
+    panel.classList.toggle("open");
+    $("btnAliPc").classList.toggle("on", panel.classList.contains("open"));
+  };
+}
+if ($("btnForceCheck")) $("btnForceCheck").onclick = () => sendAliCommand("force_check");
+if ($("btnRestartStack")) $("btnRestartStack").onclick = () => sendAliCommand("restart_stack");
 
 function downloadBarsCsv() {
   const rows = lastBars || [];

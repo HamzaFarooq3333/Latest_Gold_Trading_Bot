@@ -10,7 +10,8 @@ param(
   [ValidateSet("hamza", "ali")]
   [string]$Profile = "ali",
   [string]$Root = "",
-  [switch]$Force
+  [switch]$Force,
+  [switch]$SkipCandleWait
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +26,9 @@ $trackFiles = @(
   "mt5_live_engine.py",
   "watchdog_exness.py",
   "healthcheck_mt5.py",
+  "connection_monitor.py",
+  "github_update_agent.py",
+  "safety_gate_check.py",
   "requirements.txt",
   "VERSION.json"
 )
@@ -258,11 +262,39 @@ function Copy-FromGitHubLayout {
   return $false
 }
 
-Write-Log "auto_update start profile=$Profile root=$Root force=$Force"
+function Invoke-SafetyGate([string]$CheckRoot) {
+  $gatePs1 = Join-Path $PSScriptRoot "safety_gate.ps1"
+  if (-not (Test-Path $gatePs1)) {
+    Write-Log "WARN: safety_gate.ps1 missing; continuing without gate"
+    return $true
+  }
+  Write-Log "safety_gate check root=$CheckRoot"
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $gatePs1 -Root $CheckRoot -NoDashboard
+  if ($LASTEXITCODE -ne 0) {
+    Write-Log "ERROR: safety_gate FAILED — refusing to copy live runtime"
+    $resultPath = Join-Path $Root "state\last_update_result.json"
+    New-Item -ItemType Directory -Force -Path (Split-Path $resultPath) | Out-Null
+    @{
+      ok = $false
+      reason = "safety_gate_failed"
+      checked_root = $CheckRoot
+      utc = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json -Depth 4 | Set-Content $resultPath -Encoding UTF8
+    return $false
+  }
+  Write-Log "safety_gate PASS"
+  return $true
+}
+
+Write-Log "auto_update start profile=$Profile root=$Root force=$Force skipWait=$SkipCandleWait"
 
 $updateUrl = Read-EnvValue "BRIDGE_UPDATE_URL"
 $gitDir = Read-EnvValue "BRIDGE_UPDATE_GIT"
 $gitRemote = Read-EnvValue "BRIDGE_UPDATE_GIT_REMOTE"
+# Prefer git path when both are set (Latest is source of truth).
+if (-not $gitDir) {
+  $gitDir = "C:\onyxion-src\Latest_Gold_Trading_Bot"
+}
 $staging = Join-Path $env:TEMP ("onyxion-update-" + [guid]::NewGuid().ToString("n"))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
@@ -270,6 +302,10 @@ try {
   if ($gitDir -and (Test-Path (Join-Path $gitDir ".git"))) {
     Push-Location $gitDir
     if ($gitRemote) { git remote set-url origin $gitRemote 2>$null }
+    elseif (-not $gitRemote) {
+      $gitRemote = "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot.git"
+      git remote set-url origin $gitRemote 2>$null
+    }
     git pull --ff-only 2>&1 | ForEach-Object { Write-Log "git: $_" }
     Pop-Location
     if (-not (Copy-FromGitHubLayout -GitDir $gitDir -StagingDir $staging)) {
@@ -325,6 +361,11 @@ try {
     exit 0
   }
 
+  if (-not (Invoke-SafetyGate -CheckRoot $bundleRoot)) {
+    Write-Changelog -Action "BLOCKED_SAFETY_GATE" -Version $incomingVersion -Detail "- refused apply; live runtime unchanged"
+    exit 2
+  }
+
   Write-Log "update detected - candle-safe apply (preserve state/ and open positions; never flatten)"
   foreach ($name in $trackFiles) {
     $src = Join-Path $Root $name
@@ -332,8 +373,24 @@ try {
   }
 
   $version = $incomingVersion
-  $timing = Wait-ForCurrentM15Close
-  Write-DeploySkipMarker -RootPath $Root -SkipBarTime $timing.SkipBarTime -WaitedCloseBar $timing.WaitedCloseBar -Version $version
+  if ($SkipCandleWait) {
+    $skipPath = Join-Path $Root "state\deploy_skip_bar.json"
+    $timing = @{
+      WaitedCloseBar = ""
+      SkipBarTime    = ""
+    }
+    if (Test-Path $skipPath) {
+      try {
+        $m = Get-Content $skipPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $timing.WaitedCloseBar = [string]$m.waited_close_bar
+        $timing.SkipBarTime = [string]$m.skip_bar_time
+      } catch { }
+    }
+    Write-Log "SkipCandleWait=1 using existing skip marker skip=$($timing.SkipBarTime)"
+  } else {
+    $timing = Wait-ForCurrentM15Close
+    Write-DeploySkipMarker -RootPath $Root -SkipBarTime $timing.SkipBarTime -WaitedCloseBar $timing.WaitedCloseBar -Version $version
+  }
 
   $restart = $false
   $copiedFiles = @()
@@ -341,7 +398,7 @@ try {
     $from = Join-Path $bundleRoot $name
     if (-not (Test-Path $from)) { continue }
     $to = Join-Path $Root $name
-    if ((Test-Path $to) -and $name -match "bridge_trader|mt5_live_engine|watchdog") {
+    if ((Test-Path $to) -and $name -match "bridge_trader|mt5_live_engine|watchdog|connection_monitor|github_update_agent") {
       $oldH = (Get-FileHash $to -Algorithm SHA256).Hash
       $newH = (Get-FileHash $from -Algorithm SHA256).Hash
       if ($oldH -ne $newH) { $restart = $true }
@@ -378,6 +435,18 @@ try {
   $restartFlag = if ($restart) { "yes" } else { "no" }
   Write-Log "update complete restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime)"
   Write-History "version=$version restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime) fingerprint=$newFp files=$($copiedFiles -join ', ')"
+  $resultPath = Join-Path $Root "state\last_update_result.json"
+  New-Item -ItemType Directory -Force -Path (Split-Path $resultPath) | Out-Null
+  @{
+    ok = $true
+    version = $version
+    restart = $restart
+    waited_close_bar = $timing.WaitedCloseBar
+    skip_bar_time = $timing.SkipBarTime
+    fingerprint = $newFp
+    files = $copiedFiles
+    utc = (Get-Date).ToUniversalTime().ToString("o")
+  } | ConvertTo-Json -Depth 5 | Set-Content $resultPath -Encoding UTF8
   $detailLines = @(
     "- files updated: $($copiedFiles -join ', ')",
     "- bridge restart: **$restartFlag**",

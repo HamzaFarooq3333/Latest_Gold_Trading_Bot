@@ -56,19 +56,24 @@ echo ============================================================
 echo.
 
 REM --- 1. MT5 terminal (auto-logs in from .env; skips if already running) --
-echo [1/3] MetaTrader 5 terminal...
+echo [1/4] MetaTrader 5 terminal...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\launch_mt5.ps1" -Root "%ROOT%"
 echo.
 
 REM --- 2. Watchdog, which owns bridge_trader.py and restarts it on crash ---
 REM     start_bridge_stack.ps1 is singleton-aware: it exits if already up.
-echo [2/3] Bridge watchdog...
+echo [2/4] Bridge watchdog...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\start_bridge_stack.ps1" -Profile ali -Root "%ROOT%"
 echo.
 
 REM --- 3. Connection monitor: watches MT5 + desk and repairs the stack -----
-echo [3/3] Connection monitor...
+echo [3/4] Connection monitor...
 powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName 'OnyxionAli-ConnectionMonitor' -ErrorAction SilentlyContinue; if ($t) { if ($t.State -ne 'Running') { Start-ScheduledTask -TaskName 'OnyxionAli-ConnectionMonitor'; 'connection monitor started' } else { 'connection monitor already running' } } else { 'task missing - starting directly'; Start-Process -FilePath '%ROOT%\venv\Scripts\pythonw.exe' -ArgumentList '\"%ROOT%\connection_monitor.py\"' -WorkingDirectory '%ROOT%' -WindowStyle Hidden }"
+echo.
+
+REM --- 4. GitHub update agent: candle-safe Latest pull + status to desk -----
+echo [4/4] GitHub update agent...
+powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue; if (-not $t) { & '%ROOT%\scripts\register_github_agent_task.ps1' -Root '%ROOT%' | Out-Null; $t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue }; if ($t) { Start-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent'; 'github agent started/running' } else { 'task missing - starting directly'; Start-Process -FilePath '%ROOT%\venv\Scripts\pythonw.exe' -ArgumentList '\"%ROOT%\github_update_agent.py\"' -WorkingDirectory '%ROOT%' -WindowStyle Hidden }"
 echo.
 
 REM --- give MT5 login + first bar fetch time to produce a heartbeat --------

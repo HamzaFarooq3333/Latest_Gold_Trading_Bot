@@ -317,6 +317,16 @@ def broker_controls_post(body: dict = Body(default_factory=dict)):
     return _broker_handle("POST", "/api/broker/controls", body)
 
 
+@app.post("/api/broker/ali_pc_status")
+def broker_ali_pc_status(body: dict = Body(default_factory=dict)):
+    return _broker_handle("POST", "/api/broker/ali_pc_status", body)
+
+
+@app.post("/api/broker/ali_pc_command")
+def broker_ali_pc_command(body: dict = Body(default_factory=dict)):
+    return _broker_handle("POST", "/api/broker/ali_pc_command", body)
+
+
 @app.options("/api/broker/{path:path}")
 @app.options("/live")
 @app.options("/")

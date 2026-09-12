@@ -177,9 +177,6 @@ def apply_live_controls(cfg: dict) -> None:
         # Trailing stop in ticks - the authoritative stop setting.
         "TSL_TICKS": None,
         "TSL_TICK_SIZE": None,
-        # ATR-sized stop multiplier and every-candle entry mode.
-        "TSL_ATR_MULT": None,
-        "ENTRY_EVERY_CANDLE": None,
         "BROKER_MIN_STOP_PTS": None,
         "STOP_SLIPPAGE_PTS": None,
         "SPREAD_COST": None,
@@ -402,15 +399,7 @@ def _ema_span(src: list[float], span: int = 5) -> list[float]:
     return out
 
 
-def hist_color(h: float, thresh: float | None = None) -> str:
-    # Read HIST_THRESH at call time. The engine trusts the colour it is sent
-    # (zone_from_sent), so a threshold fixed here would silently override
-    # .env and the dashboard control no matter what they were set to.
-    if thresh is None:
-        try:
-            thresh = float(os.environ.get("HIST_THRESH", "10"))
-        except (TypeError, ValueError):
-            thresh = 10.0
+def hist_color(h: float, thresh: float = 10.0) -> str:
     if h >= thresh:
         return "green"
     if h <= -thresh:
@@ -850,9 +839,24 @@ def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
     return trades
 
 
-def annotate_bars(bars: list[dict], trades: list[dict] | None = None) -> list[dict]:
+def annotate_bars(
+    bars: list[dict],
+    trades: list[dict] | None = None,
+    *,
+    deploy_skip_times: list[str] | None = None,
+) -> list[dict]:
     """Explain Demo EA gates per closed M15 bar (prev-body + XT clear + amber arm)."""
     trades = trades or []
+    skip_keys: set[str] = set()
+    for raw in deploy_skip_times or []:
+        key = normalize_bar_time(raw)
+        if key:
+            skip_keys.add(key)
+    skip_marker = read_deploy_skip_bar()
+    if skip_marker:
+        key = normalize_bar_time(skip_marker.get("skip_bar_time"))
+        if key:
+            skip_keys.add(key)
     out = []
     seen_amber = False
     run_side = 0  # +1 buy run, -1 sell, 0 none
@@ -967,6 +971,13 @@ def annotate_bars(bars: list[dict], trades: list[dict] | None = None) -> list[di
                 else:
                     reasons.append("SKIP: run is long-side; red does not open shorts mid long-run")
 
+        bar_key = normalize_bar_time(b.get("time"))
+        deploy_skip = bool(bar_key and bar_key in skip_keys)
+        if deploy_skip:
+            reasons = [
+                "DEPLOY SKIP: no new entries this candle (code update; positions/SL preserved)"
+            ] + list(reasons)
+
         row = dict(b)
         row.update(
             {
@@ -980,6 +991,7 @@ def annotate_bars(bars: list[dict], trades: list[dict] | None = None) -> list[di
                 "seen_amber": seen_amber,
                 "run_side": run_side,
                 "action": action,
+                "deploy_skip": deploy_skip,
                 "why": " | ".join(reasons) if reasons else "—",
                 "trades_on_bar": [
                     {
@@ -1107,10 +1119,12 @@ def collect_broker_snapshot(cfg: dict, symbol: str, lab: dict | None = None) -> 
         orders = [{"time": "", "type": "ERROR", "side": "", "volume": 0, "price": 0, "ticket": "", "comment": str(e), "profit": 0, "kind": "OTHER", "entry": 0, "position_id": 0}]
 
     trades = build_trades_from_deals(orders)
-    bars = annotate_bars(collect_bars(symbol, 120), trades)
-    decision_records = (
-        (cfg.get("_mt5_runtime") or {}).get("decision_records") or []
-    )
+    runtime = cfg.get("_mt5_runtime") or {}
+    skip_times = []
+    if runtime.get("deploy_skip_bar"):
+        skip_times.append(str(runtime.get("deploy_skip_bar")))
+    bars = annotate_bars(collect_bars(symbol, 120), trades, deploy_skip_times=skip_times)
+    decision_records = runtime.get("decision_records") or []
     decisions_by_bar = {
         str(record.get("bar_time")): record
         for record in decision_records

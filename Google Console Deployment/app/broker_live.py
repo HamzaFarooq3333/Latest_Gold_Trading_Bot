@@ -50,6 +50,22 @@ def _default_controls() -> dict:
     }
 
 
+def _default_ali_pc() -> dict:
+    return {
+        "updated_at": None,
+        "github_checker": {},
+        "update": {"state": "idle"},
+        "processes": {},
+        "mt5": {},
+        "desk_link": {},
+        "code": {},
+        "risk": {},
+        "safety_gate": {},
+        "pc": {},
+        "requests_ack": {},
+    }
+
+
 def _default() -> dict:
     return {
         "account": {},
@@ -67,6 +83,8 @@ def _default() -> dict:
         "analysis": {},
         "bridge": {},
         "controls": _default_controls(),
+        "ali_pc": _default_ali_pc(),
+        "ali_pc_commands": [],
         "symbol": None,
         "values_source": "PYTHON_BRIDGE",
         "values_updated_at": None,
@@ -430,9 +448,136 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
             },
         )
 
+    if method == "POST" and path == "/api/broker/ali_pc_status":
+        body = _body(event)
+        now = _now()
+        ali = dict(broker.get("ali_pc") or _default_ali_pc())
+        for key in (
+            "github_checker",
+            "update",
+            "processes",
+            "mt5",
+            "desk_link",
+            "code",
+            "risk",
+            "safety_gate",
+            "pc",
+            "requests_ack",
+            "host",
+            "profile",
+        ):
+            if key in body:
+                if key in (
+                    "github_checker",
+                    "update",
+                    "processes",
+                    "mt5",
+                    "desk_link",
+                    "code",
+                    "risk",
+                    "safety_gate",
+                    "pc",
+                    "requests_ack",
+                ) and isinstance(body.get(key), dict):
+                    merged = dict(ali.get(key) or {})
+                    merged.update(body.get(key) or {})
+                    ali[key] = merged
+                else:
+                    ali[key] = body[key]
+        # Flatten top-level convenience fields into nested groups when sent that way.
+        if "local_sha" in body or "remote_sha" in body:
+            gh = dict(ali.get("github_checker") or {})
+            for k in ("local_sha", "remote_sha", "behind", "running", "last_poll_utc"):
+                if k in body:
+                    gh[k] = body[k]
+            ali["github_checker"] = gh
+        ali["updated_at"] = now
+        broker["ali_pc"] = ali
+        # Ack command ids the agent reports as handled.
+        ack = body.get("requests_ack") or {}
+        handled_ids = set()
+        for k in ("force_check_id", "restart_stack_id", "handled_ids"):
+            v = ack.get(k) if isinstance(ack, dict) else None
+            if isinstance(v, list):
+                handled_ids.update(str(x) for x in v)
+            elif v:
+                handled_ids.add(str(v))
+        cmds = list(broker.get("ali_pc_commands") or [])
+        if handled_ids:
+            cmds = [
+                c
+                for c in cmds
+                if str(c.get("id") or "") not in handled_ids
+                and str(c.get("status") or "pending") == "pending"
+            ]
+        # Drop stale commands older than 30 minutes.
+        fresh = []
+        for c in cmds:
+            age = _age(c.get("queued_at"))
+            if age is not None and age > 1800:
+                continue
+            fresh.append(c)
+        broker["ali_pc_commands"] = fresh[-32:]
+        store["broker_live"] = broker
+        lab.save_store(model_name, store)
+        pending = [
+            c
+            for c in broker["ali_pc_commands"]
+            if str(c.get("status") or "pending") == "pending"
+        ]
+        return response(
+            200,
+            {
+                "ok": True,
+                "saved_at": now,
+                "ali_pc": ali,
+                "pending_commands": pending,
+            },
+        )
+
+    if method == "POST" and path == "/api/broker/ali_pc_command":
+        body = _body(event)
+        action = str(body.get("action") or "").strip().lower()
+        if action not in ("force_check", "restart_stack"):
+            return response(
+                400,
+                {"ok": False, "error": "action must be force_check or restart_stack"},
+            )
+        now = _now()
+        cmd = {
+            "id": f"{action}:{now}",
+            "action": action,
+            "queued_at": now,
+            "status": "pending",
+            "requested_by": body.get("requested_by") or "dashboard",
+        }
+        cmds = list(broker.get("ali_pc_commands") or [])
+        # Idempotent: if same action already pending, keep the existing one.
+        existing = next(
+            (
+                c
+                for c in cmds
+                if c.get("action") == action and str(c.get("status") or "pending") == "pending"
+            ),
+            None,
+        )
+        if existing:
+            cmd = existing
+        else:
+            cmds.append(cmd)
+            broker["ali_pc_commands"] = cmds[-32:]
+            store["broker_live"] = broker
+            lab.save_store(model_name, store)
+        return response(200, {"ok": True, "command": cmd})
+
     if method == "GET" and path == "/api/broker/state":
         broker["heartbeat_age_sec"] = _age(broker.get("last_heartbeat_at"))
         broker["values_age_sec"] = _age(broker.get("values_updated_at"))
+        ali = dict(broker.get("ali_pc") or _default_ali_pc())
+        ali["age_sec"] = _age(ali.get("updated_at"))
+        ali["agent_offline"] = ali["age_sec"] is None or ali["age_sec"] > 90
+        broker["ali_pc"] = ali
+        broker.setdefault("ali_pc_commands", [])
         # Re-apply exact session wipe on read so stale bridge history cannot linger in the UI.
         cutoff = _parse_ts(broker.get("session_started_at"))
         if cutoff is not None:

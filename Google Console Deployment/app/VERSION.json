@@ -1,10 +1,12 @@
 ﻿{
-    "version":  "ali-pc-tick-trail-close-2026-09-11-2045",
-    "built_utc":  "2026-09-11T16:45:00Z",
-    "engine":  "Trailing SL = 1111 ticks. Trails the bar CLOSE, not the bar extreme: trailing the extreme puts the stop on the wrong side of the market (broker-invalid) and inflates backtests.",
-    "live_desk":  "https://35.253.21.246",
-    "notes":  "Backtest report: backtest_report.html",
-    "last_ali_github_sha":  "2a3e30bda82b7e8d8cc7fcd07fe2d7220b6b907e",
-    "last_ali_github_repo":  "HamzaFarooq3333/Latest_Gold_Trading_Bot",
-    "last_ali_applied_utc":  "2026-09-11T18:08:14.7888989Z"
+    "version": "ali-pc-gitops-live-monitor-2026-09-12",
+    "built_utc": "2026-09-12T16:45:00Z",
+    "engine": "Trailing SL = 1111 ticks. Trails the bar CLOSE, not the bar extreme: trailing the extreme puts the stop on the wrong side of the market (broker-invalid) and inflates backtests.",
+    "live_desk": "https://35.253.21.246",
+    "notes": "GitOps: github_update_agent + safety_gate + Ali PC live monitor panel. Backtest: backtest_report.html",
+    "gitops": {
+        "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
+        "agent": "github_update_agent.py",
+        "desk_redeploy": "Hamza-only via watch_hamza_push_deploy.ps1"
+    }
 }
