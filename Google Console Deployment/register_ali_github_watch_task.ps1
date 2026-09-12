@@ -23,10 +23,17 @@ $settings = New-ScheduledTaskSettingsSet `
   -RestartCount 5 `
   -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-  -Settings $settings -Principal $principal -Force | Out-Null
+try {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+    -Settings $settings -Principal $principal -Force | Out-Null
+} catch {
+  Write-Host "Register-ScheduledTask failed ($($_.Exception.Message)). Starting watcher in background instead..." -ForegroundColor Yellow
+  Start-Process -FilePath "powershell.exe" -ArgumentList $arg -WindowStyle Hidden
+  Write-Host "Background watcher started. Re-run this script as Administrator to persist across reboots." -ForegroundColor Yellow
+  return
+}
 
 Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 
