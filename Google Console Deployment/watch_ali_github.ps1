@@ -1,16 +1,16 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
-  TRIGGER: When Ali pushes to Latest_Gold_Trading_Bot → auto-update GCP live desk.
+  TRIGGER: When Ali pushes to Latest_Gold_Trading_Bot -> auto-update GCP live desk.
 
   Runs on Hamza's office PC (needs gh + SSH/gcloud to the Ali VM).
-  Ali never redeploys GCP himself — this watcher does it for him.
+  Ali never redeploys GCP himself - this watcher does it for him.
 
   Flow:
     Ali git push Latest
-      → this script detects author=Ali within ~30s
-      → safety_gate
-      → apply into local workspace (so Hamza can clone/sync later)
-      → GCP install.sh redeploy (gcloud, or SSH key fallback)
+      -> this script detects author=Ali within ~30s
+      -> safety_gate
+      -> apply into local workspace (so Hamza can clone/sync later)
+      -> GCP install.sh redeploy (gcloud, or SSH key fallback)
 
   Source of truth: HamzaFarooq3333/Latest_Gold_Trading_Bot only.
 #>
@@ -62,13 +62,28 @@ function Write-Status($obj) {
 
 function Load-State {
   if (Test-Path $StateFile) {
-    try { return Get-Content $StateFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
+    try {
+      $s = Get-Content $StateFile -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($null -eq $s) { return [pscustomobject]@{ last_sha = $null } }
+      # Migrate older shape { seen = { repo = sha } }
+      if (-not ($s.PSObject.Properties.Name -contains "last_sha")) {
+        $migrated = $null
+        if ($s.seen -and $s.seen.$Repo) { $migrated = [string]$s.seen.$Repo }
+        elseif ($s.seen) {
+          $props = $s.seen.PSObject.Properties
+          if ($props -and $props.Count -gt 0) { $migrated = [string]$props[0].Value }
+        }
+        return [pscustomobject]@{ last_sha = $migrated }
+      }
+      return [pscustomobject]@{ last_sha = $s.last_sha }
+    } catch { }
   }
   return [pscustomobject]@{ last_sha = $null }
 }
 
 function Save-State($state) {
-  ($state | ConvertTo-Json -Depth 8) | Set-Content $StateFile -Encoding UTF8
+  $blob = [pscustomobject]@{ last_sha = [string]$state.last_sha }
+  ($blob | ConvertTo-Json -Depth 8) | Set-Content $StateFile -Encoding UTF8
 }
 
 function Get-LatestSha([string]$repo) {
@@ -110,13 +125,13 @@ function Invoke-LocalSafetyGate([string]$checkRoot) {
     $gate = Join-Path $Workspace "Ali PC Deployment\scripts\safety_gate.ps1"
   }
   if (-not (Test-Path $gate)) {
-    Write-WatchLog "WARN safety_gate.ps1 missing — continuing"
+    Write-WatchLog "WARN safety_gate.ps1 missing - continuing"
     return $true
   }
   Write-WatchLog ("safety_gate " + $checkRoot)
   & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Root $checkRoot
   if ($LASTEXITCODE -ne 0) {
-    Write-WatchLog "safety_gate FAILED — skip GCP redeploy"
+    Write-WatchLog "safety_gate FAILED - skip GCP redeploy"
     return $false
   }
   Write-WatchLog "safety_gate PASS"
@@ -230,10 +245,10 @@ function Deploy-AliGcpDashboard {
       Write-WatchLog "GCP dashboard deploy OK -> https://35.253.21.246/live"
       return $true
     } catch {
-      Write-WatchLog ("gcloud deploy failed: " + $_.Exception.Message + " — trying SSH fallback")
+      Write-WatchLog ("gcloud deploy failed: " + $_.Exception.Message + " - trying SSH fallback")
     }
   } else {
-    Write-WatchLog "gcloud missing — using SSH fallback"
+    Write-WatchLog "gcloud missing - using SSH fallback"
   }
 
   try {
@@ -262,7 +277,7 @@ function Process-AliPush($info) {
   $url = "https://github.com/$Repo.git"
   $applied = Apply-LocalFromClone -repoUrl $url -sha $info.sha
   if (-not $applied) {
-    Write-WatchLog "local apply blocked — desk not redeployed"
+    Write-WatchLog "local apply blocked - desk not redeployed"
     Write-Status @{
       event = "blocked_safety_gate"
       sha = $info.sha
@@ -297,7 +312,7 @@ function Process-AliPush($info) {
   }
 }
 
-Write-WatchLog "Ali→GCP auto-deploy watcher start poll=${PollSeconds}s repo=$Repo"
+Write-WatchLog "Ali->GCP auto-deploy watcher start poll=${PollSeconds}s repo=$Repo"
 $state = Load-State
 $info = Get-LatestSha $Repo
 if ($info) {

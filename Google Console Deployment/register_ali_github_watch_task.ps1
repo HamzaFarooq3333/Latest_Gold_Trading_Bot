@@ -1,7 +1,7 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Register Windows Scheduled Task: OnyxionAli-GitHubToGcpWatch
-  Starts at logon and keeps watching Latest for Ali pushes → auto GCP desk redeploy.
+  Starts at logon and keeps watching Latest for Ali pushes -> auto GCP desk redeploy.
 #>
 [CmdletBinding()]
 param(
@@ -39,7 +39,7 @@ Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 
 Write-Host "Registered + started $taskName" -ForegroundColor Green
 Write-Host "  Watches: HamzaFarooq3333/Latest_Gold_Trading_Bot (Ali pushes)"
-Write-Host "  Action:  safety_gate → apply local → GCP desk redeploy"
+Write-Host "  Action:  safety_gate -> apply local -> GCP desk redeploy"
 Write-Host "  Log:     $Workspace\Google Console Deployment\logs\ali_github_watch.log"
 Write-Host "  Status:  $Workspace\Google Console Deployment\logs\ali_push_deploy_status.json"
 Write-Host ""
