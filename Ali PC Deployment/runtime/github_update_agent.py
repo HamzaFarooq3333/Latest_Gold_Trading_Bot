@@ -354,10 +354,92 @@ def pc_uptime_sec() -> int | None:
         return None
 
 
+def fetch_remote_commit_meta(remote_url: str | None) -> dict:
+    """Best-effort Latest tip metadata from GitHub API (no token required for public repos)."""
+    repo = "HamzaFarooq3333/Latest_Gold_Trading_Bot"
+    if remote_url and "github.com" in remote_url:
+        # https://github.com/owner/repo.git → owner/repo
+        try:
+            part = remote_url.rstrip("/").split("github.com/")[-1]
+            part = part.replace(".git", "").strip("/")
+            if part.count("/") == 1:
+                repo = part
+        except Exception:
+            pass
+    url = f"https://api.github.com/repos/{repo}/commits/main"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "onyxion-github-agent",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        commit = data.get("commit") or {}
+        author = commit.get("author") or {}
+        return {
+            "sha": data.get("sha"),
+            "pushed_at_utc": author.get("date"),
+            "author_name": author.get("name") or (data.get("author") or {}).get("login"),
+            "author_login": (data.get("author") or {}).get("login"),
+            "message": ((commit.get("message") or "").splitlines() or [""])[0][:160],
+            "html_url": data.get("html_url"),
+            "repo": repo,
+        }
+    except Exception as exc:
+        return {"error": str(exc), "repo": repo}
+
+
+def yes_no(flag: bool | None) -> str:
+    if flag is True:
+        return "YES"
+    if flag is False:
+        return "NO"
+    return "UNKNOWN"
+
+
+def build_sync_timeline(state: dict) -> dict:
+    """Plain-language YES/NO timeline for the live Ali PC panel."""
+    local = state.get("local_sha")
+    remote = state.get("remote_sha") or state.get("remote_push_sha")
+    behind = bool(local and remote and local != remote)
+    upd = str(state.get("update_state") or "idle")
+    last_ok = state.get("last_successful_apply_utc")
+    last_result = state.get("last_result")
+    return {
+        "last_github_push_utc": state.get("remote_push_utc"),
+        "last_github_push_by": state.get("remote_push_author"),
+        "last_github_push_sha": (remote or "")[:12] or None,
+        "last_github_push_message": state.get("remote_push_message"),
+        "ali_detected_github_change": yes_no(behind),
+        "ali_detected_github_change_bool": behind,
+        "ali_started_clone_and_apply": yes_no(
+            upd in ("waiting_close", "applying", "restarting")
+        ),
+        "ali_started_clone_and_apply_bool": upd
+        in ("waiting_close", "applying", "restarting"),
+        "apply_phase": upd,
+        "apply_started_at_utc": state.get("apply_started_at"),
+        "last_successful_pull_test_restart_utc": last_ok,
+        "last_successful_apply_sha": state.get("last_successful_apply_sha"),
+        "last_successful_apply_result": last_result if last_result == "update_ok" else (
+            "update_ok" if last_ok else last_result
+        ),
+        "bridge_in_sync_with_github": yes_no(bool(local and remote and local == remote)),
+        "notes": (
+            "Desk/GCP redeploy is Hamza-only. Ali PC only pulls bridge/runtime "
+            "(candle-safe; never flattens; never runs install.sh)."
+        ),
+    }
+
+
 def build_payload(state: dict, env: dict) -> dict:
     local = state.get("local_sha")
     remote = state.get("remote_sha")
     behind = bool(local and remote and local != remote)
+    timeline = build_sync_timeline(state)
     return {
         "host": os.environ.get("COMPUTERNAME") or "ali-pc",
         "profile": "ali",
@@ -369,6 +451,10 @@ def build_payload(state: dict, env: dict) -> dict:
             "behind": behind,
             "git_dir": state.get("git_dir"),
             "remote": state.get("remote_url"),
+            "last_github_push_utc": state.get("remote_push_utc"),
+            "last_github_push_by": state.get("remote_push_author"),
+            "last_github_push_message": state.get("remote_push_message"),
+            "ali_detected_change": timeline["ali_detected_github_change"],
         },
         "update": {
             "state": state.get("update_state", "idle"),
@@ -377,7 +463,11 @@ def build_payload(state: dict, env: dict) -> dict:
             "waited_close_bar": state.get("waited_close_bar"),
             "last_restart_utc": state.get("last_restart_utc"),
             "blocked_error": state.get("blocked_error"),
+            "apply_started_at_utc": state.get("apply_started_at"),
+            "last_successful_pull_test_restart_utc": state.get("last_successful_apply_utc"),
+            "ali_started_clone_and_apply": timeline["ali_started_clone_and_apply"],
         },
+        "sync_timeline": timeline,
         "processes": state.get("processes") or {},
         "mt5": state.get("mt5") or {},
         "desk_link": state.get("desk_link") or {},
@@ -439,6 +529,7 @@ def apply_update(state: dict, env: dict) -> None:
     git_dir = Path(state["git_dir"])
     remote_url = state.get("remote_url")
     state["update_state"] = "waiting_close"
+    state["apply_started_at"] = datetime.now(timezone.utc).isoformat()
     plan = candle_wait_plan()
     state["skip_bar_time"] = plan["skip_bar_time"]
     state["waited_close_bar"] = plan["waited_close_bar"]
@@ -519,22 +610,26 @@ def apply_update(state: dict, env: dict) -> None:
         return
 
     state["update_state"] = "restarting"
-    state["last_restart_utc"] = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    state["last_restart_utc"] = now_iso
     state["local_sha"] = tip or state.get("remote_sha")
     state["last_result"] = "update_ok"
+    state["last_successful_apply_utc"] = now_iso
+    state["last_successful_apply_sha"] = tip
     state["blocked_error"] = None
     state["update_state"] = "idle"
-    RESULT_FILE.write_text(
-        json.dumps(
-            {
-                "ok": True,
-                "sha": tip,
-                "skip_bar_time": plan["skip_bar_time"],
-                "waited_close_bar": plan["waited_close_bar"],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    success_blob = {
+        "ok": True,
+        "sha": tip,
+        "skip_bar_time": plan["skip_bar_time"],
+        "waited_close_bar": plan["waited_close_bar"],
+        "applied_at_utc": now_iso,
+        "safety_gate_ok": True,
+        "bridge_restarted": True,
+    }
+    RESULT_FILE.write_text(json.dumps(success_blob, indent=2), encoding="utf-8")
+    (STATE_DIR / "last_successful_apply.json").write_text(
+        json.dumps(success_blob, indent=2), encoding="utf-8"
     )
     log(f"update_ok sha={tip} skip={plan['skip_bar_time']}")
 
@@ -594,6 +689,12 @@ def main() -> int:
         "last_result": None,
         "requests_ack": {},
     }
+    prev_ok = read_json(STATE_DIR / "last_successful_apply.json", {}) or {}
+    if prev_ok.get("applied_at_utc"):
+        state["last_successful_apply_utc"] = prev_ok.get("applied_at_utc")
+        state["last_successful_apply_sha"] = prev_ok.get("sha")
+        if prev_ok.get("ok"):
+            state["last_result"] = "update_ok"
     log(f"github_update_agent start root={ROOT} git={git_dir}")
     last_status = 0.0
     last_poll = 0.0
@@ -604,13 +705,27 @@ def main() -> int:
             if now - last_poll >= POLL_SECONDS or state.get("force_check"):
                 state["force_check"] = False
                 state["last_poll_utc"] = datetime.now(timezone.utc).isoformat()
+                meta = fetch_remote_commit_meta(remote_url)
+                if meta.get("sha"):
+                    state["remote_push_sha"] = meta.get("sha")
+                    state["remote_push_utc"] = meta.get("pushed_at_utc")
+                    state["remote_push_author"] = meta.get("author_login") or meta.get(
+                        "author_name"
+                    )
+                    state["remote_push_message"] = meta.get("message")
+                    # Prefer API tip when ls-remote fails.
+                    if not state.get("remote_sha"):
+                        state["remote_sha"] = meta.get("sha")
+                    else:
+                        state["remote_sha"] = meta.get("sha") or state.get("remote_sha")
                 if git_dir.is_dir() and (git_dir / ".git").exists():
                     state["local_sha"] = git_sha(git_dir, "HEAD")
-                    state["remote_sha"] = remote_main_sha(git_dir, remote_url)
+                    tip = remote_main_sha(git_dir, remote_url)
+                    if tip:
+                        state["remote_sha"] = tip
                 else:
                     state["last_error_line"] = f"git dir missing: {git_dir}"
                     state["local_sha"] = None
-                    state["remote_sha"] = None
                 last_poll = now
                 behind = (
                     state.get("local_sha")

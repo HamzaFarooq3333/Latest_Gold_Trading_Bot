@@ -55,6 +55,7 @@ def _default_ali_pc() -> dict:
         "updated_at": None,
         "github_checker": {},
         "update": {"state": "idle"},
+        "sync_timeline": {},
         "processes": {},
         "mt5": {},
         "desk_link": {},
@@ -455,6 +456,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
         for key in (
             "github_checker",
             "update",
+            "sync_timeline",
             "processes",
             "mt5",
             "desk_link",
@@ -470,6 +472,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                 if key in (
                     "github_checker",
                     "update",
+                    "sync_timeline",
                     "processes",
                     "mt5",
                     "desk_link",

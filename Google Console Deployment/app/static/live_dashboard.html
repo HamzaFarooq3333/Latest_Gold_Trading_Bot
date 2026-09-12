@@ -178,6 +178,7 @@
       </div>
       <div class="legend" id="aliAgentNote">Agent posts every ~20s. Stale &gt;90s → AGENT OFFLINE.</div>
       <div class="ali-grid" id="aliGrid">
+        <div class="ali-card"><h3>Update timeline</h3><pre id="aliTimeline">—</pre></div>
         <div class="ali-card"><h3>GitHub checker</h3><pre id="aliGithub">—</pre></div>
         <div class="ali-card"><h3>Update pipeline</h3><pre id="aliUpdate">—</pre></div>
         <div class="ali-card"><h3>Processes</h3><pre id="aliProcs">—</pre></div>
@@ -1698,6 +1699,29 @@ function fmtObj(obj) {
   }).join("\n") || "—";
 }
 
+function formatSyncTimeline(t) {
+  t = t || {};
+  const lines = [
+    "Last GitHub push (Latest tip): " + (t.last_github_push_utc || "—"),
+    "Pushed by: " + (t.last_github_push_by || "—"),
+    "Push SHA: " + (t.last_github_push_sha || "—"),
+    "Push message: " + (t.last_github_push_message || "—"),
+    "",
+    "Ali detected GitHub change? " + (t.ali_detected_github_change || "UNKNOWN"),
+    "Ali started clone + apply? " + (t.ali_started_clone_and_apply || "UNKNOWN"),
+    "Apply phase: " + (t.apply_phase || "idle"),
+    "Apply started at: " + (t.apply_started_at_utc || "—"),
+    "",
+    "Last successful pull + safety test + bridge restart: "
+      + (t.last_successful_pull_test_restart_utc || "—"),
+    "Last successful SHA: " + ((t.last_successful_apply_sha || "").slice(0, 12) || "—"),
+    "Bridge in sync with GitHub? " + (t.bridge_in_sync_with_github || "UNKNOWN"),
+    "",
+    t.notes || "",
+  ];
+  return lines.join("\n");
+}
+
 function renderAliPc(ali) {
   ali = ali || {};
   const age = ali.age_sec;
@@ -1713,6 +1737,7 @@ function renderAliPc(ali) {
   }
   window.__aliPcSkipBar = ((ali.update || {}).skip_bar_time) || "";
   const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+  set("aliTimeline", formatSyncTimeline(ali.sync_timeline));
   set("aliGithub", fmtObj(ali.github_checker));
   set("aliUpdate", fmtObj(ali.update));
   set("aliProcs", fmtObj(ali.processes));
@@ -1724,9 +1749,13 @@ function renderAliPc(ali) {
   set("aliPc", fmtObj(ali.pc));
   set("aliAck", fmtObj(ali.requests_ack));
   if ($("aliAgentNote")) {
+    const tl = ali.sync_timeline || {};
     $("aliAgentNote").textContent = offline
       ? ("AGENT OFFLINE" + (age != null ? (" · last seen " + Math.round(age) + "s ago") : " · no status yet"))
-      : ("Agent live · age " + Math.round(age || 0) + "s · skip_bar=" + (window.__aliPcSkipBar || "—"));
+      : ("Agent live · age " + Math.round(age || 0) + "s"
+        + " · detected=" + (tl.ali_detected_github_change || "?")
+        + " · applying=" + (tl.ali_started_clone_and_apply || "?")
+        + " · last_ok=" + (tl.last_successful_pull_test_restart_utc || "—"));
   }
 }
 
