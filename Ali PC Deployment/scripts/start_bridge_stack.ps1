@@ -4,13 +4,23 @@ param(
   [ValidateSet("hamza", "ali")]
   [string]$Profile = "ali",
   [string]$Root = "",
-  [string]$PythonPath = "C:\Program Files\Python312\python.exe"
+  # Empty by default so the venv under $Root wins. Hard-coding a global
+  # interpreter here is what caused duplicate stacks: auto_update_bridge.ps1,
+  # connection_monitor.py and github_update_agent.py all call this script
+  # WITHOUT -PythonPath, so they started a second watchdog+bridge under
+  # C:\Program Files\Python312 while the scheduled task ran the venv one.
+  # Two bridges on one account means duplicate orders.
+  [string]$PythonPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 if (-not $Root) { $Root = "C:\onyxion-$Profile" }
 $watchdog = Join-Path $Root "watchdog_exness.py"
 if (-not (Test-Path $watchdog)) { throw "watchdog not found: $watchdog — run install_bridge.ps1 first" }
+if (-not $PythonPath) {
+  $venvPy = Join-Path $Root "venv\Scripts\python.exe"
+  $PythonPath = if (Test-Path $venvPy) { $venvPy } else { "C:\Program Files\Python312\python.exe" }
+}
 if (-not (Test-Path $PythonPath)) {
   $PythonPath = (Get-Command python.exe -ErrorAction Stop).Source
 }
