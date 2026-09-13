@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Register long-running GitHub update agent for Ali PC.
   Task name: OnyxionAli-GitHubAgent
@@ -28,8 +28,14 @@ $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -RestartCount 3 `
   -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit ([TimeSpan]::Zero)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -Hidden `
+  -MultipleInstances IgnoreNew
+# RunLevel Limited, not Highest: Highest makes Register-ScheduledTask fail with
+# "Access is denied" unless the console is elevated, and the agent needs no
+# elevation. Limited also keeps the task from being an admin-owned task that a
+# normal user cannot later modify.
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggerLogon `
   -Settings $settings -Principal $principal -Force | Out-Null

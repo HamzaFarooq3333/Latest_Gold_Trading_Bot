@@ -20,6 +20,30 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Windows: every child this agent spawns (git, powershell) opens a console
+# window by default, and even under pythonw.exe that window flashes to the
+# foreground. The agent polls every POLL_SECONDS, so that is a popup every 90
+# seconds on a machine meant to run unattended.
+#
+# CREATE_NO_WINDOW is forced here rather than on each of the ~11 call sites so
+# that calls added later stay silent too, and so no single missed site can
+# reintroduce the flashing. Explicit creationflags passed by a caller are
+# preserved (OR-ed, not replaced).
+if os.name == "nt":
+    _CREATE_NO_WINDOW = 0x08000000
+
+    def _silence_console(fn):
+        def _wrapped(*args, **kwargs):
+            kwargs["creationflags"] = kwargs.get("creationflags", 0) | _CREATE_NO_WINDOW
+            return fn(*args, **kwargs)
+        return _wrapped
+
+    subprocess.run = _silence_console(subprocess.run)
+    subprocess.check_output = _silence_console(subprocess.check_output)
+    subprocess.check_call = _silence_console(subprocess.check_call)
+    subprocess.call = _silence_console(subprocess.call)
+    subprocess.Popen = _silence_console(subprocess.Popen)
+
 ROOT = Path(os.environ.get("MT5_ROOT", r"C:\onyxion-ali"))
 ENV_FILE = ROOT / ".env"
 LOG_DIR = ROOT / "logs"
