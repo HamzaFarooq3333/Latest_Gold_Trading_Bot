@@ -105,10 +105,37 @@
   }
   .note strong { color: var(--text); }
   .ali-panel {
-    display: none; margin-top: .75rem; padding: .75rem;
+    display: none; margin-top: .75rem; padding: .85rem 1rem;
     border: 1px solid var(--line); border-radius: 10px; background: #0f1620;
   }
   .ali-panel.open { display: block; }
+  .ali-simple-status {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: .55rem; margin: .65rem 0 .75rem;
+  }
+  @media (max-width: 900px) { .ali-simple-status { grid-template-columns: repeat(2, 1fr); } }
+  .ali-stat {
+    background: #141b24; border: 1px solid var(--line); border-radius: 8px; padding: .55rem .65rem;
+  }
+  .ali-stat .lbl { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .ali-stat .val { font-family: var(--mono); font-size: .95rem; margin-top: .25rem; font-weight: 600; }
+  .ali-stat .val.ok { color: var(--ok); }
+  .ali-stat .val.bad { color: var(--bad); }
+  .ali-stat .val.warn { color: var(--warn); }
+  .ali-proc-row {
+    display: flex; flex-wrap: wrap; gap: .4rem; margin: .35rem 0 .75rem;
+  }
+  .ali-proc {
+    border: 1px solid var(--line); border-radius: 999px; padding: .28rem .7rem;
+    font-family: var(--mono); font-size: .72rem; background: #141b24;
+  }
+  .ali-proc.on { border-color: #2a6b4f; color: var(--ok); }
+  .ali-proc.off { border-color: #6b2a2a; color: var(--bad); }
+  .ali-proc.unk { color: var(--muted); }
+  .ali-qa { font-family: var(--mono); font-size: .78rem; line-height: 1.55; color: #c8d2de; margin: .35rem 0 .7rem; }
+  .ali-qa .yes { color: var(--ok); font-weight: 600; }
+  .ali-qa .no { color: var(--bad); font-weight: 600; }
+  .ali-details { display: none; margin-top: .5rem; }
+  .ali-details.open { display: block; }
   .ali-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .55rem;
   }
@@ -172,23 +199,47 @@
     </div>
     <div class="ali-panel" id="aliPcPanel">
       <div class="row-actions">
-        <h2 style="margin:0;flex:1">Ali PC — GitOps monitor</h2>
-        <button type="button" id="btnForceCheck">Force GitHub check</button>
-        <button type="button" id="btnRestartStack" class="danger">Restart stack</button>
+        <h2 style="margin:0;flex:1">Ali PC — simple status</h2>
+        <button type="button" id="btnForceCheck">Check GitHub now</button>
+        <button type="button" id="btnRestartStack" class="danger">Restart Ali stack</button>
+        <button type="button" id="btnAliDetails">Show details</button>
       </div>
-      <div class="legend" id="aliAgentNote">Agent posts every ~20s. Stale &gt;90s → AGENT OFFLINE.</div>
-      <div class="ali-grid" id="aliGrid">
-        <div class="ali-card"><h3>Update timeline</h3><pre id="aliTimeline">—</pre></div>
-        <div class="ali-card"><h3>GitHub checker</h3><pre id="aliGithub">—</pre></div>
-        <div class="ali-card"><h3>Update pipeline</h3><pre id="aliUpdate">—</pre></div>
-        <div class="ali-card"><h3>Processes</h3><pre id="aliProcs">—</pre></div>
-        <div class="ali-card"><h3>MT5 feed</h3><pre id="aliMt5">—</pre></div>
-        <div class="ali-card"><h3>Desk link</h3><pre id="aliDesk">—</pre></div>
-        <div class="ali-card"><h3>Code version</h3><pre id="aliCode">—</pre></div>
-        <div class="ali-card"><h3>Risk</h3><pre id="aliRisk">—</pre></div>
-        <div class="ali-card"><h3>Safety gate</h3><pre id="aliGate">—</pre></div>
-        <div class="ali-card"><h3>PC health</h3><pre id="aliPc">—</pre></div>
-        <div class="ali-card"><h3>Requests ack</h3><pre id="aliAck">—</pre></div>
+      <div class="legend" id="aliAgentNote">One glance: is the agent online, are all processes up, is code in sync?</div>
+
+      <div class="ali-simple-status">
+        <div class="ali-stat"><div class="lbl">1. Agent</div><div class="val" id="aliStatAgent">—</div></div>
+        <div class="ali-stat"><div class="lbl">2. All processes</div><div class="val" id="aliStatProcs">—</div></div>
+        <div class="ali-stat"><div class="lbl">3. GitHub sync</div><div class="val" id="aliStatSync">—</div></div>
+        <div class="ali-stat"><div class="lbl">4. Update</div><div class="val" id="aliStatUpdate">—</div></div>
+      </div>
+
+      <div class="lbl" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.25rem">Processes on Ali PC</div>
+      <div class="ali-proc-row" id="aliProcPills">
+        <span class="ali-proc unk" id="procMt5">MT5 —</span>
+        <span class="ali-proc unk" id="procBridge">Bridge —</span>
+        <span class="ali-proc unk" id="procWatchdog">Watchdog —</span>
+        <span class="ali-proc unk" id="procConn">Conn monitor —</span>
+        <span class="ali-proc unk" id="procAgent">GitHub agent —</span>
+      </div>
+      <div class="legend" id="aliProcSummary">Waiting for Ali PC status…</div>
+
+      <div class="lbl" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.25rem">GitHub update (yes / no)</div>
+      <div class="ali-qa" id="aliQaBox">—</div>
+
+      <div class="ali-details" id="aliDetailsBox">
+        <div class="ali-grid" id="aliGrid">
+          <div class="ali-card"><h3>Update timeline</h3><pre id="aliTimeline">—</pre></div>
+          <div class="ali-card"><h3>GitHub checker</h3><pre id="aliGithub">—</pre></div>
+          <div class="ali-card"><h3>Update pipeline</h3><pre id="aliUpdate">—</pre></div>
+          <div class="ali-card"><h3>Processes raw</h3><pre id="aliProcs">—</pre></div>
+          <div class="ali-card"><h3>MT5 feed</h3><pre id="aliMt5">—</pre></div>
+          <div class="ali-card"><h3>Desk link</h3><pre id="aliDesk">—</pre></div>
+          <div class="ali-card"><h3>Code version</h3><pre id="aliCode">—</pre></div>
+          <div class="ali-card"><h3>Risk</h3><pre id="aliRisk">—</pre></div>
+          <div class="ali-card"><h3>Safety gate</h3><pre id="aliGate">—</pre></div>
+          <div class="ali-card"><h3>PC health</h3><pre id="aliPc">—</pre></div>
+          <div class="ali-card"><h3>Requests ack</h3><pre id="aliAck">—</pre></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1702,24 +1753,52 @@ function fmtObj(obj) {
 function formatSyncTimeline(t) {
   t = t || {};
   const lines = [
-    "Last GitHub push (Latest tip): " + (t.last_github_push_utc || "—"),
-    "Pushed by: " + (t.last_github_push_by || "—"),
-    "Push SHA: " + (t.last_github_push_sha || "—"),
-    "Push message: " + (t.last_github_push_message || "—"),
-    "",
-    "Ali detected GitHub change? " + (t.ali_detected_github_change || "UNKNOWN"),
-    "Ali started clone + apply? " + (t.ali_started_clone_and_apply || "UNKNOWN"),
-    "Apply phase: " + (t.apply_phase || "idle"),
-    "Apply started at: " + (t.apply_started_at_utc || "—"),
-    "",
-    "Last successful pull + safety test + bridge restart: "
-      + (t.last_successful_pull_test_restart_utc || "—"),
-    "Last successful SHA: " + ((t.last_successful_apply_sha || "").slice(0, 12) || "—"),
-    "Bridge in sync with GitHub? " + (t.bridge_in_sync_with_github || "UNKNOWN"),
-    "",
-    t.notes || "",
+    "Last GitHub push: " + (t.last_github_push_utc || "—"),
+    "By: " + (t.last_github_push_by || "—") + " · SHA " + (t.last_github_push_sha || "—"),
+    "Message: " + (t.last_github_push_message || "—"),
+    "Detected change: " + (t.ali_detected_github_change || "?"),
+    "Started apply: " + (t.ali_started_clone_and_apply || "?") + " · phase " + (t.apply_phase || "idle"),
+    "Last success: " + (t.last_successful_pull_test_restart_utc || "—"),
+    "In sync: " + (t.bridge_in_sync_with_github || "?"),
   ];
   return lines.join("\n");
+}
+
+function procRunning(info) {
+  if (!info || typeof info !== "object") return null;
+  if (info.running === true || info.running === 1 || info.running === "true") return true;
+  if (info.running === false || info.running === 0 || info.running === "false") return false;
+  if (info.pid != null && Number(info.pid) > 0) return true;
+  return null;
+}
+
+function setProcPill(id, label, running) {
+  const el = $(id);
+  if (!el) return;
+  if (running === true) {
+    el.className = "ali-proc on";
+    el.textContent = label + " ON";
+  } else if (running === false) {
+    el.className = "ali-proc off";
+    el.textContent = label + " OFF";
+  } else {
+    el.className = "ali-proc unk";
+    el.textContent = label + " —";
+  }
+}
+
+function setStat(id, text, kind) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = "val" + (kind ? (" " + kind) : "");
+}
+
+function ynSpan(v) {
+  const s = String(v || "UNKNOWN").toUpperCase();
+  if (s === "YES") return '<span class="yes">YES</span>';
+  if (s === "NO") return '<span class="no">NO</span>';
+  return s;
 }
 
 function renderAliPc(ali) {
@@ -1727,17 +1806,84 @@ function renderAliPc(ali) {
   const age = ali.age_sec;
   const offline = !!ali.agent_offline || age == null || age > 90;
   const behind = !!(ali.github_checker || {}).behind;
-  const upd = String((ali.update || {}).state || "idle");
+  const tl = ali.sync_timeline || {};
+  const upd = String((ali.update || {}).state || tl.apply_phase || "idle");
   const blocked = upd === "blocked" || String((ali.update || {}).last_result || "") === "update_blocked";
+  const procs = ali.processes || {};
+  const mt5On = procRunning(procs.mt5);
+  const bridgeOn = procRunning(procs.bridge);
+  const watchOn = procRunning(procs.watchdog);
+  const connOn = procRunning(procs.connection_monitor);
+  const agentOn = offline ? false : (procRunning(procs.github_agent) !== false);
+  const known = [mt5On, bridgeOn, watchOn, connOn].filter(v => v === true || v === false);
+  const allKnownUp = known.length >= 3 && known.every(v => v === true) && (mt5On !== false) && (bridgeOn !== false);
+  const anyDown = [mt5On, bridgeOn, watchOn, connOn, agentOn].some(v => v === false);
+
   if ($("aliPill")) {
-    $("aliPill").className = pillClass(!offline && !blocked, !offline && (behind || upd !== "idle"));
-    $("aliPill").textContent = offline
-      ? "ALI PC · AGENT OFFLINE"
-      : (blocked ? "ALI PC · UPDATE BLOCKED" : (behind ? "ALI PC · BEHIND" : "ALI PC · OK"));
+    let pillText = "ALI PC · OK";
+    let cls = "on";
+    if (offline) { pillText = "ALI PC · OFFLINE"; cls = "off"; }
+    else if (anyDown) { pillText = "ALI PC · PROCESS DOWN"; cls = "off"; }
+    else if (blocked) { pillText = "ALI PC · UPDATE BLOCKED"; cls = "off"; }
+    else if (behind || upd !== "idle") { pillText = behind ? "ALI PC · BEHIND" : "ALI PC · UPDATING"; cls = "warn"; }
+    else if (allKnownUp) { pillText = "ALI PC · ALL RUNNING"; cls = "on"; }
+    $("aliPill").className = "pill " + cls;
+    $("aliPill").textContent = pillText;
   }
+
   window.__aliPcSkipBar = ((ali.update || {}).skip_bar_time) || "";
+
+  setStat("aliStatAgent", offline ? "OFFLINE" : "ONLINE", offline ? "bad" : "ok");
+  if (offline) setStat("aliStatProcs", "UNKNOWN", "warn");
+  else if (anyDown) setStat("aliStatProcs", "NOT ALL RUNNING", "bad");
+  else if (allKnownUp) setStat("aliStatProcs", "ALL RUNNING", "ok");
+  else setStat("aliStatProcs", "CHECKING…", "warn");
+
+  if (offline) setStat("aliStatSync", "UNKNOWN", "warn");
+  else if (behind || tl.bridge_in_sync_with_github === "NO") setStat("aliStatSync", "BEHIND", "warn");
+  else setStat("aliStatSync", "IN SYNC", "ok");
+
+  if (blocked) setStat("aliStatUpdate", "BLOCKED", "bad");
+  else if (upd === "waiting_close" || upd === "applying" || upd === "restarting") setStat("aliStatUpdate", upd.toUpperCase(), "warn");
+  else setStat("aliStatUpdate", "IDLE", "ok");
+
+  setProcPill("procMt5", "MT5", offline ? null : mt5On);
+  setProcPill("procBridge", "Bridge", offline ? null : bridgeOn);
+  setProcPill("procWatchdog", "Watchdog", offline ? null : watchOn);
+  setProcPill("procConn", "Conn monitor", offline ? null : connOn);
+  setProcPill("procAgent", "GitHub agent", offline ? false : true);
+
+  const downNames = [];
+  if (mt5On === false) downNames.push("MT5");
+  if (bridgeOn === false) downNames.push("Bridge");
+  if (watchOn === false) downNames.push("Watchdog");
+  if (connOn === false) downNames.push("Conn monitor");
+  if (offline) downNames.push("GitHub agent");
+  if ($("aliProcSummary")) {
+    $("aliProcSummary").textContent = offline
+      ? "Agent offline — process list may be stale."
+      : (downNames.length
+        ? ("Down: " + downNames.join(", ") + " · use Restart Ali stack")
+        : "All watched processes report running.");
+  }
+
+  if ($("aliQaBox")) {
+    $("aliQaBox").innerHTML = [
+      "New GitHub update detected? " + ynSpan(tl.ali_detected_github_change || (behind ? "YES" : "NO")),
+      "Ali started clone/apply? " + ynSpan(tl.ali_started_clone_and_apply || "NO"),
+      "Code matches GitHub? " + ynSpan(tl.bridge_in_sync_with_github || (behind ? "NO" : "YES")),
+      "Last good apply: " + (tl.last_successful_pull_test_restart_utc || (ali.update || {}).last_successful_pull_test_restart_utc || "—"),
+    ].join("<br>");
+  }
+
+  if ($("aliAgentNote")) {
+    $("aliAgentNote").textContent = offline
+      ? ("Agent offline" + (age != null ? (" · last seen " + Math.round(age) + "s ago") : ""))
+      : ("Agent online · age " + Math.round(age || 0) + "s · open details only if you need raw fields");
+  }
+
   const set = (id, text) => { const el = $(id); if (el) el.textContent = text; };
-  set("aliTimeline", formatSyncTimeline(ali.sync_timeline));
+  set("aliTimeline", formatSyncTimeline(tl));
   set("aliGithub", fmtObj(ali.github_checker));
   set("aliUpdate", fmtObj(ali.update));
   set("aliProcs", fmtObj(ali.processes));
@@ -1748,20 +1894,11 @@ function renderAliPc(ali) {
   set("aliGate", fmtObj(ali.safety_gate));
   set("aliPc", fmtObj(ali.pc));
   set("aliAck", fmtObj(ali.requests_ack));
-  if ($("aliAgentNote")) {
-    const tl = ali.sync_timeline || {};
-    $("aliAgentNote").textContent = offline
-      ? ("AGENT OFFLINE" + (age != null ? (" · last seen " + Math.round(age) + "s ago") : " · no status yet"))
-      : ("Agent live · age " + Math.round(age || 0) + "s"
-        + " · detected=" + (tl.ali_detected_github_change || "?")
-        + " · applying=" + (tl.ali_started_clone_and_apply || "?")
-        + " · last_ok=" + (tl.last_successful_pull_test_restart_utc || "—"));
-  }
 }
 
 async function sendAliCommand(action) {
-  const label = action === "force_check" ? "Force GitHub check" : "Restart stack";
-  if (!confirm(label + " on Ali PC?\n\nSafe queue only — will not abort an in-flight candle wait / flatten trades.")) return;
+  const label = action === "force_check" ? "Check GitHub now" : "Restart Ali stack";
+  if (!confirm(label + "?\n\nSafe only — will not flatten trades or abort an in-flight candle wait.")) return;
   try {
     const r = await fetch("/api/broker/ali_pc_command", {
       method: "POST",
@@ -1771,7 +1908,7 @@ async function sendAliCommand(action) {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || ("HTTP " + r.status));
-    alert(label + " queued: " + (d.command && d.command.id ? d.command.id : "ok"));
+    alert(label + " queued.");
   } catch (e) {
     alert(label + " failed: " + e.message);
   }
@@ -1787,6 +1924,14 @@ if ($("btnAliPc")) {
 }
 if ($("btnForceCheck")) $("btnForceCheck").onclick = () => sendAliCommand("force_check");
 if ($("btnRestartStack")) $("btnRestartStack").onclick = () => sendAliCommand("restart_stack");
+if ($("btnAliDetails")) {
+  $("btnAliDetails").onclick = () => {
+    const box = $("aliDetailsBox");
+    if (!box) return;
+    box.classList.toggle("open");
+    $("btnAliDetails").textContent = box.classList.contains("open") ? "Hide details" : "Show details";
+  };
+}
 
 function downloadBarsCsv() {
   const rows = lastBars || [];
