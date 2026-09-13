@@ -1,0 +1,72 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Live Trade Analysis</title><style>*{box-sizing:border-box}body{margin:0;background:#131722;color:#d1d4dc;font:14px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif}
+header{padding:20px 26px;border-bottom:1px solid #2a2e39}h1{margin:0;font-size:20px}.sub{color:#787b86;font-size:12.5px;margin-top:5px}
+.wrap{padding:20px 26px 70px}h2{font-size:15px;margin:28px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin:14px 0 20px}
+.stat{background:#1e222d;border:1px solid #2a2e39;border-radius:6px;padding:11px 13px}
+.stat span{display:block;color:#787b86;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.stat b{font-size:18px;font-weight:600}.stat i{font-style:normal;color:#787b86;font-size:11.5px;display:block;margin-top:2px}
+.pos{color:#26a69a}.neg{color:#ef5350}
+table{width:100%;border-collapse:collapse;background:#1e222d;border:1px solid #2a2e39;border-radius:6px;overflow:hidden;margin-bottom:6px}
+th,td{padding:7px 11px;text-align:right;border-bottom:1px solid #2a2e39;font-size:12.5px}
+th:first-child,td:first-child,td:last-child,th:last-child{text-align:left}
+th{background:#252931;color:#9db2bd;font-weight:500;text-transform:uppercase;font-size:10.5px;letter-spacing:.4px}
+tr.lossrow{background:#2a1618}tr.hl{background:#0f2a1f}
+.find{background:#1e222d;border-left:3px solid #2962ff;padding:13px 17px;border-radius:0 6px 6px 0;margin:10px 0;font-size:13px}
+.find b{color:#5b9cff}
+.warn{background:#1e222d;border-left:3px solid #ff9800;padding:14px 18px;border-radius:0 6px 6px 0;margin:20px 0}
+.warn h3{margin:0 0 8px;font-size:14px;color:#ff9800}.warn p{margin:7px 0;color:#b2b5be;font-size:13px}
+.good{background:#0f2a1f;border-left:3px solid #26a69a;padding:14px 18px;border-radius:0 6px 6px 0;margin:20px 0}
+.good h3{margin:0 0 8px;font-size:14px;color:#26a69a}.good p{margin:7px 0;color:#b8c4cc;font-size:13px}</style></head><body>
+<header><h1>Live Trade Analysis — XAUUSDm, Ali demo account</h1>
+<div class="sub">200 closed trades pulled from the desk (31 Aug 11:00 – 11 Sep 14:00 UTC)
+&nbsp;·&nbsp; every one executed under the <b>OLD</b> rules &nbsp;·&nbsp; backtests below use M15 bars from the same MT5 terminal</div></header>
+<div class="wrap">
+
+<h2>What actually happened</h2>
+<div class="grid"><div class="stat"><span>Live trades analysed</span><b>200</b><i>31 Aug – 11 Sep</i></div><div class="stat"><span>Actual net result</span><b><span class="pos">+$66.10</span></b></div><div class="stat"><span>Win rate</span><b>11.5%</b><i>23 of 200</i></div><div class="stat"><span>Profit factor</span><b>1.24</b></div><div class="stat"><span>Avg win / loss</span><b>+$15.08 / $-1.59</b></div><div class="stat"><span>Median hold</span><b>3s</b><i>52% under 5s</i></div><div class="stat"><span>Best / worst trade</span><b>+$161.82 / $-21.73</b></div><div class="stat"><span>Top 5 trades</span><b><span class="pos">+$290.90</span></b><i>other 195: -$224.80</i></div></div>
+
+<div class="find"><b>Finding 1 — the account was carried by five trades.</b> The top 5 made <span class="pos">+$290.90</span>;
+the other 195 together made <span class="neg">-$224.80</span>. Strip those five and the account loses money.</div>
+<div class="find"><b>Finding 2 — the stop was inside market noise.</b> Median hold was
+3 seconds and 52% of trades closed within 5 seconds.
+The average loss was $1.59, almost exactly the 1,111-tick ($1.111) stop plus spread.</div>
+<div class="find"><b>Finding 3 — supplementary trades destroyed value.</b> SUPP took
+131 of 200 trades for <span class="neg">-$19.83</span>,
+at a 7.6% win rate, with a median hold of
+1s. PRIMARY made <span class="pos">+$85.93</span>.</div>
+
+<h2>By trade type</h2>
+<table><thead><tr><th>Kind</th><th>Trades</th><th>Win rate</th><th>Net</th><th>Avg</th><th>Median hold</th></tr></thead><tbody><tr><td>PRIMARY</td><td>69</td><td>18.8%</td><td><span class="pos">+$85.93</span></td><td><span class="pos">+$1.245</span></td><td>14s</td></tr><tr><td>SUPP</td><td>131</td><td>7.6%</td><td><span class="neg">-$19.83</span></td><td><span class="neg">-$0.151</span></td><td>1s</td></tr></tbody></table>
+<h2>By exit reason</h2>
+<table><thead><tr><th>Exit</th><th>Trades</th><th>Net</th><th>Avg</th></tr></thead><tbody><tr><td>SUPPLEMENTARY_STOP</td><td>90</td><td><span class="pos">+$131.11</span></td><td><span class="pos">+$1.457</span></td></tr><tr><td>BROKER_STOP</td><td>90</td><td><span class="neg">-$77.59</span></td><td><span class="neg">-$0.862</span></td></tr><tr><td>ORANGE_HISTOGRAM_EXIT</td><td>20</td><td><span class="pos">+$12.58</span></td><td><span class="pos">+$0.629</span></td></tr></tbody></table>
+<h2>The 5 best trades</h2>
+<table><thead><tr><th>Opened</th><th>Side</th><th>Kind</th><th>Entry</th><th>Exit</th><th>Held</th><th>P/L</th><th>Reason</th></tr></thead><tbody><tr><td>10 Sep 08:33</td><td>SELL</td><td>PRIMARY</td><td>4401.267</td><td>4320.357</td><td>38271s</td><td><span class="pos">+$161.82</span></td><td>SUPPLEMENTARY_STOP</td></tr><tr><td>11 Sep 04:45</td><td>BUY</td><td>PRIMARY</td><td>4330.968</td><td>4350.227</td><td>6336s</td><td><span class="pos">+$38.51</span></td><td>BROKER_STOP</td></tr><tr><td>11 Sep 05:00</td><td>BUY</td><td>SUPP</td><td>4331.315</td><td>4350.227</td><td>5437s</td><td><span class="pos">+$37.82</span></td><td>BROKER_STOP</td></tr><tr><td>11 Sep 05:30</td><td>BUY</td><td>SUPP</td><td>4336.194</td><td>4350.227</td><td>3639s</td><td><span class="pos">+$28.06</span></td><td>BROKER_STOP</td></tr><tr><td>11 Sep 05:15</td><td>BUY</td><td>SUPP</td><td>4337.880</td><td>4350.227</td><td>4538s</td><td><span class="pos">+$24.69</span></td><td>BROKER_STOP</td></tr></tbody></table>
+<h2>The 10 worst trades</h2>
+<table><thead><tr><th>Opened</th><th>Side</th><th>Kind</th><th>Entry</th><th>Exit</th><th>Held</th><th>P/L</th><th>Reason</th></tr></thead><tbody><tr class='lossrow'><td>11 Sep 01:15</td><td>BUY</td><td>SUPP</td><td>4333.162</td><td>4329.736</td><td>365s</td><td><span class="neg">-$6.85</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 09:45</td><td>SELL</td><td>PRIMARY</td><td>4343.302</td><td>4347.201</td><td>902s</td><td><span class="neg">-$7.80</span></td><td>ORANGE_HISTOGRAM_EXIT</td></tr><tr class='lossrow'><td>11 Sep 13:15</td><td>BUY</td><td>PRIMARY</td><td>4388.426</td><td>4382.962</td><td>119s</td><td><span class="neg">-$10.93</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 08:45</td><td>BUY</td><td>PRIMARY</td><td>4352.958</td><td>4345.906</td><td>751s</td><td><span class="neg">-$14.11</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 12:15</td><td>SELL</td><td>SUPP</td><td>4327.515</td><td>4335.371</td><td>733s</td><td><span class="neg">-$15.71</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 00:00</td><td>SELL</td><td>PRIMARY</td><td>4313.877</td><td>4321.860</td><td>384s</td><td><span class="neg">-$15.97</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 04:00</td><td>SELL</td><td>SUPP</td><td>4303.133</td><td>4311.275</td><td>396s</td><td><span class="neg">-$16.28</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>11 Sep 06:15</td><td>BUY</td><td>SUPP</td><td>4359.016</td><td>4350.227</td><td>940s</td><td><span class="neg">-$17.58</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>09 Sep 19:15</td><td>SELL</td><td>PRIMARY</td><td>4400.384</td><td>4411.060</td><td>20885s</td><td><span class="neg">-$21.35</span></td><td>BROKER_STOP</td></tr><tr class='lossrow'><td>10 Sep 01:15</td><td>BUY</td><td>PRIMARY</td><td>4412.717</td><td>4401.852</td><td>26238s</td><td><span class="neg">-$21.73</span></td><td>BROKER_STOP</td></tr></tbody></table>
+
+<h2>Backtest on the same live window (31 Aug 11:00 – 11 Sep 20:45)</h2>
+<p style="color:#9db2bd;margin:0 0 10px">M15 bars pulled from the bot's own MT5 terminal. Costs $0.52 spread + $0.20 stop slippage.</p>
+<table><thead><tr><th>Rules</th><th>Trades</th><th>Win rate</th><th>Net</th><th>PF</th><th>Max DD</th><th>Median hold</th></tr></thead><tbody><tr><td>OLD rules (what actually ran)</td><td>76</td><td>10.5%</td><td><span class="neg">-$168.64</span></td><td>0.26</td><td class='neg'>-$169</td><td>0 bars</td></tr><tr class=hl><td>CURRENT live rules</td><td>304</td><td>45.1%</td><td><span class="pos">+$1,672.20</span></td><td>2.04</td><td class='neg'>-$583</td><td>4 bars</td></tr><tr><td>TH 20 candidate</td><td>237</td><td>51.9%</td><td><span class="pos">+$1,881.58</span></td><td>2.78</td><td class='neg'>-$328</td><td>3 bars</td></tr></tbody></table>
+
+<div class="good"><h3>The improvements were already applied — and this is what they are worth</h3>
+<p>Findings 2 and 3 are exactly what the configuration change on 11 Sep addressed: the fixed 1,111-tick stop was replaced with
+<b>1.25 × ATR(14)</b>, and supplementary adds were turned off (<b>MAX_SUPP=0</b>).</p>
+<p>Over this identical window the old rules simulate to <b><span class="neg">-$168.64</span></b>; the current live rules to
+<b><span class="pos">+$1,672.20</span></b> at PF 2.04. The account's real result under the old rules was <span class="pos">+$66.10</span> —
+carried entirely by five lucky trades.</p></div>
+
+<div class="warn"><h3>The one new idea I tested — and rejected</h3>
+<p>On these 11 live days, raising the histogram threshold from 15 to <b>20</b> looked excellent: <span class="pos">+$1,881.58</span> versus
+<span class="pos">+$1,672.20</span>, profit factor 2.78 versus 2.04, and drawdown cut from $583 to $328.</p>
+<p>It does not survive validation. Over 6 months, walk-forward:</p>
+<table><thead><tr><th>Threshold</th><th>6-month net</th><th>PF</th><th>Max DD</th><th>Out-of-sample net</th></tr></thead><tbody><tr class=hl><td>TH 15 (current live)</td><td><span class="pos">+$26,321.29</span></td><td>1.88</td><td class='neg'>-$1,493</td><td><span class="pos">+$11,745.83</span></td></tr><tr><td>TH 20 (live-window pick)</td><td><span class="pos">+$22,344.57</span></td><td>2.14</td><td class='neg'>-$1,015</td><td><span class="pos">+$8,202.01</span></td></tr></tbody></table>
+<p>TH 20 gives up <b>$3,544 out-of-sample</b>. Eleven days is far too short to separate an edge from luck, and this is what
+over-fitting looks like when you catch it. <b>No change recommended.</b> TH 20 does buy a genuinely lower drawdown, so it is a
+defensible choice if you want a calmer ride — but it is a risk preference, not an improvement.</p></div>
+
+<div class="warn"><h3>Caveats</h3>
+<p><b>Nothing here validates the current rules live.</b> All 200 trades predate them; the live sample under the new
+configuration is still zero. The comparison above is simulation versus simulation.</p>
+<p><b>Simulation is kinder than reality.</b> The backtest fills at the break level; the live account paid real spread and
+slippage on every one of those 3-second stop-outs.</p></div>
+</div></body></html>

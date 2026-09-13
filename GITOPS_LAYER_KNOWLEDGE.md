@@ -3,8 +3,7 @@
 **Repo (source of truth):** https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot  
 **Live desk:** https://35.253.21.246/live (login: desk credentials — never share Google/GCP password with Ali)  
 **Ali PC root:** `C:\onyxion-ali`  
-**Hamza workspace:** `D:\Company\Onyxion\Week 7\New folder\New folder\New folder`  
-**Rollback pins:** `ROLLBACK\GOOD_SHA.txt` (pin only when you say so)
+**Hamza workspace:** `D:\Company\Onyxion\Week 7\New folder\New folder\New folder`
 
 ---
 
@@ -19,12 +18,10 @@
 | **L4 — Desk status API** | GCP | Receive Ali status + queue Force check / Restart | `POST /api/broker/ali_pc_status`, `POST /api/broker/ali_pc_command`, `broker.ali_pc` |
 | **L5 — Live monitor UI** | GCP | Ali PC panel: timeline YES/NO, processes, gate, buttons, chart X | `static/live_dashboard.html` |
 | **L6 — Hamza/Ali → GCP auto-deploy** | Hamza office PC | Any allowed push to Latest → gate → local apply → GCP `install.sh` | `watch_latest_desk_deploy.ps1`, task `OnyxionLatest-DeskDeployWatch` |
-| **L7 — Ali-only watcher (legacy)** | Hamza office | Ali-author pushes only | `watch_ali_github.ps1` |
-| **L8 — Hamza-only watcher** | Hamza office | Hamza-author pushes only | `watch_hamza_push_deploy.ps1` |
-| **L9 — Bridge / MT5 runtime** | Ali PC | Trading + heartbeats to desk | `bridge_trader.py`, `mt5_live_engine.py`, `watchdog_exness.py`, `connection_monitor.py` |
-| **L10 — Zero-touch start** | Ali PC | One bat starts stack + agent | `START_BOT.bat` |
-| **L11 — Away mode** | Ali | PC on; if dead run bat only | `ALI_AWAY_RUNBOOK.md` |
-| **L12 — Rollback discipline** | Hamza | Pin good SHAs; ask before push/commits | `ROLLBACK\`, rule `.cursor/rules/github-push-approval.mdc` |
+| **L7 — Bridge / MT5 runtime** | Ali PC | Trading + heartbeats to desk; one engine shared with the desk | `bridge_trader.py`, `mt5_live_engine.py`, `watchdog_exness.py`, `connection_monitor.py` |
+| **L8 — Zero-touch start** | Ali PC | One bat starts stack + agent; four hidden tasks self-heal | `START_BOT.bat`, `scripts\register_tasks.ps1` |
+| **L9 — Away mode** | Ali | PC on; if dead run bat only | `ALI_AWAY_RUNBOOK.md` |
+| **L10 — Config precedence** | Both | `.env` on Ali PC governs; desk controls only once saved on the dashboard | `bridge_trader.apply_live_controls`, `broker_live.CONTROL_KEYS` |
 
 ---
 
@@ -86,38 +83,27 @@ Clone Latest once to `BRIDGE_UPDATE_GIT` before the agent can apply.
 
 ## Rollback
 
-1. Read `ROLLBACK\GOOD_SHA.txt`  
-2. Restore that SHA on Latest (revert or re-release)  
-3. Office watcher redeploys desk  
-4. Ali agent pulls candle-safe  
-
-Pin only when Hamza says: `pin SHA <sha> as good — <reason>`.
+1. `git revert` (or re-release) the good SHA on `main` of Latest
+2. Office watcher redeploys the desk
+3. Ali agent pulls candle-safe (open positions untouched)
 
 ---
 
-## Commit / push discipline (Hamza)
+## Commit / push discipline
 
-Before any GitHub push, assistant must:
-
-1. Summarize changes  
-2. Propose or ask for commit message(s)  
-3. Wait for explicit OK  
-4. Then commit/push  
-
-Style: `desk:`, `bridge:`, `gitops:`, `test:`, `docs:` — see `ROLLBACK\COMMIT_STYLE.txt`.
+Before any GitHub push: summarise the change, agree the commit message, then commit/push.
+Style: `desk:`, `bridge:`, `gitops:`, `test:`, `docs:`.
 
 ---
 
 ## Tests (feature coverage)
 
-- `test_safety_gate.py`  
-- `test_deploy_skip_bar.py`  
-- `test_github_agent_status.py`  
-- `test_candle_wait_timing.py`  
-- `test_restart_request_safe.py`  
-- `test_ali_pc_api.py`  
-- `test_skip_bar_marker_ui.py`  
-- Live smoke: `_feature_smoke_test.py`  
+Ali PC runtime (`python -m unittest discover -p "test_*.py"` in `Ali PC Deployment/runtime`):
+
+- `test_engine_rules.py` - every-candle stacking, ATR stop, close-trailing, amber flatten, classic mode, live-read controls, ticket reconciliation
+- `test_safety_gate.py`, `test_deploy_skip_bar.py`, `test_github_agent_status.py`, `test_candle_wait_timing.py`, `test_restart_request_safe.py`
+
+Desk app (`Google Console Deployment/app`): `test_ali_pc_api.py`, `test_bridge_entry_dedupe.py`, `test_skip_bar_marker_ui.py`
 
 ---
 

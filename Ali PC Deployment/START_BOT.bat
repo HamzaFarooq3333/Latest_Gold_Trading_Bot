@@ -73,7 +73,7 @@ echo.
 
 REM --- 4. GitHub update agent: candle-safe Latest pull + status to desk -----
 echo [4/4] GitHub update agent...
-powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue; if (-not $t) { & '%ROOT%\scripts\register_github_agent_task.ps1' -Root '%ROOT%' | Out-Null; $t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue }; if ($t) { Start-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent'; 'github agent started/running' } else { 'task missing - starting directly'; Start-Process -FilePath '%ROOT%\venv\Scripts\pythonw.exe' -ArgumentList '\"%ROOT%\github_update_agent.py\"' -WorkingDirectory '%ROOT%' -WindowStyle Hidden }"
+powershell -NoProfile -Command "$t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue; if (-not $t) { & '%ROOT%\scripts\register_tasks.ps1' -Root '%ROOT%' | Out-Null; $t = Get-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent' -ErrorAction SilentlyContinue }; if ($t) { Start-ScheduledTask -TaskName 'OnyxionAli-GitHubAgent'; 'github agent started/running' } else { 'task missing - starting directly'; Start-Process -FilePath '%ROOT%\venv\Scripts\pythonw.exe' -ArgumentList '\"%ROOT%\github_update_agent.py\"' -WorkingDirectory '%ROOT%' -WindowStyle Hidden }"
 echo.
 
 REM --- give MT5 login + first bar fetch time to produce a heartbeat --------
@@ -104,7 +104,7 @@ if "!STATE!"=="0" (
     echo.
     echo  Check, in this order:
     echo    1^) Is Algo Trading enabled in MT5? ^(toolbar button^)
-    echo    2^) %ROOT%\logs\bridge_asim.log        - last 20 lines
+    echo    2^) %ROOT%\logs\bridge_YYYYMMDD.log    - last 20 lines
     echo    3^) %ROOT%\logs\connection_check.log   - MT5 / desk state
     echo    4^) Is this PC's public IP allowed on the GCP firewall?
 )

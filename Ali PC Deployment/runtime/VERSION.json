@@ -1,12 +1,12 @@
-﻿{
-    "version": "ali-pc-gitops-live-monitor-2026-09-12",
-    "built_utc": "2026-09-12T16:45:00Z",
-    "engine": "Trailing SL = 1111 ticks. Trails the bar CLOSE, not the bar extreme: trailing the extreme puts the stop on the wrong side of the market (broker-invalid) and inflates backtests.",
+{
+    "version": "ali-pc-clean-2026-09-13",
+    "built_utc": "2026-09-13T10:30:00Z",
+    "engine": "ENTRY_EVERY_CANDLE=1 (primary gate on every green/red candle, stacking to MAXPOS), HIST_THRESH=15, stop = 1.25 x Wilder ATR(14) trailing each bar CLOSE, amber flattens. All tunables read live from env; .env wins over desk controls unless saved on the dashboard.",
     "live_desk": "https://35.253.21.246",
-    "notes": "GitOps: github_update_agent + safety_gate + Ali PC live monitor panel. Backtest: backtest_report.html",
+    "notes": "Single-source engine (runtime/mt5_live_engine.py mirrored into Google Console Deployment/app). Bridge binds MT5 tickets and reconciles broker-side closes. Legacy AWS/zip paths removed.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",
-        "desk_redeploy": "Hamza-only via watch_hamza_push_deploy.ps1"
+        "desk_redeploy": "Hamza office watcher (watch_latest_desk_deploy.ps1) on any push"
     }
 }

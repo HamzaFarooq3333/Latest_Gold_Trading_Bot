@@ -1,13 +1,30 @@
-"""Persist and serve the Asim MT5 live desk snapshot."""
+"""Persist and serve the MT5 live desk snapshot (/api/broker/*).
+
+The bridge POSTs heartbeats / executions / Ali PC status here; the live
+dashboard reads /api/broker/state. Everything lives in the lab store under
+"broker_live" (a JSON file on the VM).
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
 import os
+from datetime import datetime, timezone
 
 MAX_ITEMS = 512
-EXPECTED_LOGIN = int(os.environ.get("EXPECTED_MT5_LOGIN", "472640728"))
+EXPECTED_LOGIN = int(os.environ.get("EXPECTED_MT5_LOGIN", "0") or 0)
 EXPECTED_SYMBOL = os.environ.get("EXPECTED_MT5_SYMBOL", "XAUUSDm")
+
+# Live controls the bridge honours. The desk only stores them; the bridge
+# reads them back and applies them ONLY once someone has saved them on the
+# dashboard (controls.updated_at set). Until then the bridge's .env governs.
+CONTROL_KEYS = (
+    "VOLUME", "HIST_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
+    "TSL_TICKS", "TSL_TICK_SIZE", "TSL_PTS", "BROKER_MIN_STOP_PTS",
+    "STOP_SLIPPAGE_PTS", "SPREAD_COST", "TRAIL_EVERY_CANDLE", "TRAIL_ENTRY_BAR",
+    "ENTRY_BAR_MODE", "DISABLE_STOP_LOSS", "MAXPOS", "MAX_SUPP", "BEST_LOT_MULT",
+    "XTREND_GATE", "XTREND_GATE_SUPP", "XTREND_SOURCE", "SKIP_WEEKENDS",
+)
 
 
 def _now() -> str:
@@ -15,36 +32,48 @@ def _now() -> str:
 
 
 def _body(event: dict) -> dict:
-    import json
-
     try:
         return json.loads(event.get("body") or "{}")
     except (TypeError, json.JSONDecodeError):
         return {}
 
 
+def _env_number(name: str, default):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw) if "." in raw or isinstance(default, float) else int(raw)
+    except ValueError:
+        return raw
+
+
 def _default_controls() -> dict:
+    """Defaults shown on the dashboard before anyone saves: the desk's own env
+    (the same profile the bridge .env carries), so a reset/redeploy never
+    surfaces values nobody configured."""
     return {
-        "VOLUME": 0.01,
-        "TSL_PTS": 0.25,
-        "TSL_PCT": 0.25,
-        "TSL_TICKS": 1111,
-        "TSL_TICK_SIZE": 0.001,
-        "BROKER_MIN_STOP_PTS": 0.30,
-        "STOP_SLIPPAGE_PTS": 0,
-        "SPREAD_COST": 0.06,
-        "TRAIL_EVERY_CANDLE": 1,
-        "TRAIL_ENTRY_BAR": 1,
-        "ENTRY_BAR_MODE": "defer",
-        "DISABLE_STOP_LOSS": 0,
-        "MAXPOS": 20,
-        "MAX_SUPP": 10,
-        "BEST_LOT_MULT": 2.0,
-        "HIST_THRESH": 10,
-        "XTREND_GATE": 1,
-        "XTREND_GATE_SUPP": 0,
-        "XTREND_SOURCE": "supertrend",
-        "SKIP_WEEKENDS": 0,
+        "VOLUME": _env_number("VOLUME", 0.02),
+        "HIST_THRESH": _env_number("HIST_THRESH", 15),
+        "ENTRY_EVERY_CANDLE": _env_number("ENTRY_EVERY_CANDLE", 1),
+        "TSL_ATR_MULT": _env_number("TSL_ATR_MULT", 1.25),
+        "TSL_TICKS": _env_number("TSL_TICKS", 1111),
+        "TSL_TICK_SIZE": _env_number("TSL_TICK_SIZE", 0.001),
+        "TSL_PTS": _env_number("TSL_PTS", 1.0),
+        "BROKER_MIN_STOP_PTS": _env_number("BROKER_MIN_STOP_PTS", 0.30),
+        "STOP_SLIPPAGE_PTS": _env_number("STOP_SLIPPAGE_PTS", 0),
+        "SPREAD_COST": _env_number("SPREAD_COST", 0.06),
+        "TRAIL_EVERY_CANDLE": _env_number("TRAIL_EVERY_CANDLE", 1),
+        "TRAIL_ENTRY_BAR": _env_number("TRAIL_ENTRY_BAR", 1),
+        "ENTRY_BAR_MODE": os.environ.get("ENTRY_BAR_MODE", "defer"),
+        "DISABLE_STOP_LOSS": _env_number("DISABLE_STOP_LOSS", 0),
+        "MAXPOS": _env_number("MAXPOS", 20),
+        "MAX_SUPP": _env_number("MAX_SUPP", 0),
+        "BEST_LOT_MULT": _env_number("BEST_LOT_MULT", 2.0),
+        "XTREND_GATE": _env_number("XTREND_GATE", 1),
+        "XTREND_GATE_SUPP": _env_number("XTREND_GATE_SUPP", 0),
+        "XTREND_SOURCE": os.environ.get("XTREND_SOURCE", "gaga"),
+        "SKIP_WEEKENDS": _env_number("SKIP_WEEKENDS", 0),
         "updated_at": None,
         "updated_by": None,
     }
@@ -646,34 +675,15 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
     if method == "GET" and path == "/api/broker/controls":
         controls = dict(_default_controls())
         controls.update(broker.get("controls") or {})
-        return response(200, {"ok": True, "controls": controls})
+        controls.pop("TSL_PCT", None)   # obsolete percentage stop stored by older desks
+        return response(200, {"ok": True, "controls": controls,
+                              "source": "dashboard" if controls.get("updated_at") else "env_defaults"})
 
     if method == "POST" and path == "/api/broker/controls":
         body = _body(event)
         controls = dict(_default_controls())
         controls.update(broker.get("controls") or {})
-        allowed = {
-            "VOLUME",
-            "TSL_PTS",
-            "TSL_PCT",
-            "TSL_TICKS",
-            "TSL_TICK_SIZE",
-            "BROKER_MIN_STOP_PTS",
-            "STOP_SLIPPAGE_PTS",
-            "SPREAD_COST",
-            "TRAIL_EVERY_CANDLE",
-            "TRAIL_ENTRY_BAR",
-            "ENTRY_BAR_MODE",
-            "DISABLE_STOP_LOSS",
-            "MAXPOS",
-            "MAX_SUPP",
-            "BEST_LOT_MULT",
-            "HIST_THRESH",
-            "XTREND_GATE",
-            "XTREND_GATE_SUPP",
-            "XTREND_SOURCE",
-            "SKIP_WEEKENDS",
-        }
+        allowed = set(CONTROL_KEYS)
         incoming = body.get("controls") if isinstance(body.get("controls"), dict) else body
         for key, value in (incoming or {}).items():
             if key in allowed:

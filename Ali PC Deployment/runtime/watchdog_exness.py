@@ -1,23 +1,29 @@
-"""Keep the isolated Exness terminal and selected bridge alive on Windows."""
+"""Keep the portable Exness terminal and the ASIM bridge alive on Windows.
+
+Started hidden by scripts/start_bridge_stack.ps1 (which sets MT5_ROOT and
+MT5_BRIDGE_MODEL). Every POLL_SECONDS it relaunches whichever of the two is
+missing. Process detection is by command line, not by Popen handle, because
+this watchdog can itself be restarted independently of its children.
+"""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(os.environ.get("MT5_ROOT", r"C:\onyxion"))
-BRIDGE_MODEL = os.environ.get("MT5_BRIDGE_MODEL", "DEMO").strip().upper()
+ROOT = Path(os.environ.get("MT5_ROOT", r"C:\onyxion-ali"))
+BRIDGE_MODEL = os.environ.get("MT5_BRIDGE_MODEL", "ASIM").strip().upper()
 ENV_FILE = ROOT / ".env"
 
 
 def env_value(name: str, default: str = "") -> str:
-    """Read a simple KEY=value from the local, untracked .env file."""
+    """Read KEY=value from the local, untracked .env (falls back to the environment)."""
     try:
-        for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        for raw in ENV_FILE.read_text(encoding="utf-8-sig").splitlines():
             line = raw.strip()
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
@@ -28,22 +34,16 @@ def env_value(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
-INSTALL_ROOT = Path(
-    env_value(
-        f"{BRIDGE_MODEL}_MT5_INSTALL_ROOT",
-        env_value("MT5_INSTALL_ROOT", str(ROOT / "exness-mt5")),
-    )
-)
-TERMINAL = Path(
-    env_value(
-        f"{BRIDGE_MODEL}_MT5_TERMINAL_PATH",
-        str(INSTALL_ROOT / "terminal64.exe"),
-    )
-)
+INSTALL_ROOT = Path(env_value(f"{BRIDGE_MODEL}_MT5_INSTALL_ROOT",
+                              env_value("MT5_INSTALL_ROOT", str(ROOT / "exness-mt5"))))
+TERMINAL = Path(env_value(f"{BRIDGE_MODEL}_MT5_TERMINAL_PATH", str(INSTALL_ROOT / "terminal64.exe")))
 BRIDGE = ROOT / "bridge_trader.py"
 LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / f"exness_watchdog_{BRIDGE_MODEL.lower()}.log"
-BRIDGE_LOG = LOG_DIR / f"bridge_{BRIDGE_MODEL.lower()}.log"
+# Only the bridge's stderr (crash tracebacks) lands here; its normal output
+# already goes to logs/bridge_YYYYMMDD.log, so capturing stdout too doubled
+# every line into a file that never rotated.
+BRIDGE_STDERR_LOG = LOG_DIR / f"bridge_{BRIDGE_MODEL.lower()}_stderr.log"
 LOCK_FILE = ROOT / "state" / f"exness_watchdog_{BRIDGE_MODEL.lower()}.lock"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 POLL_SECONDS = 15
@@ -51,24 +51,15 @@ LOCK_HANDLE = None
 
 
 def process_matches(name: str, fragment: str) -> bool:
-    """Find a process by executable name and command-line fragment.
-
-    The watchdog itself runs as SYSTEM and can be restarted independently of
-    its children, so Popen handles alone are not enough to prevent duplicates.
-    """
     command = (
         "Get-CimInstance Win32_Process | "
-        f"Where-Object {{ $_.Name -eq '{name}' -and "
-        f"$_.CommandLine -like '*{fragment}*' }} | "
-        "Select-Object -First 1 | "
-        "ForEach-Object { $_.ProcessId }"
+        f"Where-Object {{ $_.Name -eq '{name}' -and $_.CommandLine -like '*{fragment}*' }} | "
+        "Select-Object -First 1 | ForEach-Object { $_.ProcessId }"
     )
     try:
         output = subprocess.check_output(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
+            text=True, stderr=subprocess.DEVNULL, timeout=10, creationflags=CREATE_NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -81,13 +72,12 @@ def acquire_lock() -> None:
     LOCK_HANDLE = LOCK_FILE.open("a+", encoding="utf-8")
     try:
         import msvcrt
-
         LOCK_HANDLE.seek(0)
         LOCK_HANDLE.write("1")
         LOCK_HANDLE.flush()
         LOCK_HANDLE.seek(0)
         msvcrt.locking(LOCK_HANDLE.fileno(), msvcrt.LK_NBLCK, 1)
-    except (ImportError, OSError, IOError):
+    except (ImportError, OSError):
         LOCK_HANDLE.close()
         LOCK_HANDLE = None
         raise SystemExit("another Exness watchdog is already running")
@@ -95,9 +85,8 @@ def acquire_lock() -> None:
 
 def log(message: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    line = f"[{datetime.now(timezone.utc).isoformat()}] {message}\n"
     with LOG_FILE.open("a", encoding="utf-8") as stream:
-        stream.write(line)
+        stream.write(f"[{datetime.now(timezone.utc).isoformat()}] {message}\n")
 
 
 def main() -> int:
@@ -107,34 +96,22 @@ def main() -> int:
     if not BRIDGE.is_file():
         log(f"bridge missing: {BRIDGE}")
         return 3
-
     acquire_lock()
     log("Exness watchdog started")
     try:
         while True:
             if not process_matches("terminal64.exe", str(INSTALL_ROOT)):
-                subprocess.Popen(
-                    [str(TERMINAL), "/portable"],
-                    cwd=str(INSTALL_ROOT),
-                    creationflags=CREATE_NO_WINDOW,
-                )
+                subprocess.Popen([str(TERMINAL), "/portable"], cwd=str(INSTALL_ROOT), creationflags=CREATE_NO_WINDOW)
                 log("started dedicated MT5 terminal")
                 time.sleep(30)
-
             if not process_matches("python.exe", "bridge_trader.py"):
-                bridge_stream = BRIDGE_LOG.open("a", encoding="utf-8")
-                subprocess.Popen(
-                    [sys.executable, str(BRIDGE), "--model", BRIDGE_MODEL],
-                    cwd=str(ROOT),
-                    stdout=bridge_stream,
-                    stderr=subprocess.STDOUT,
-                    creationflags=CREATE_NO_WINDOW,
-                )
+                with BRIDGE_STDERR_LOG.open("a", encoding="utf-8") as err_stream:
+                    subprocess.Popen(
+                        [sys.executable, str(BRIDGE), "--model", BRIDGE_MODEL],
+                        cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=err_stream,
+                        creationflags=CREATE_NO_WINDOW,
+                    )
                 log(f"started {BRIDGE_MODEL} bridge")
-                # The child owns this file descriptor after Popen; closing
-                # our handle avoids leaking one descriptor per restart.
-                bridge_stream.close()
-
             time.sleep(POLL_SECONDS)
     except KeyboardInterrupt:
         log("watchdog stopped")

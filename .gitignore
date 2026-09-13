@@ -1,8 +1,10 @@
-﻿**/__pycache__/
+**/__pycache__/
 **/*.pyc
 **/*.pyo
-Ali PC Deployment/dist/
-**/suggested_logic_backtest_results.json
 .env
 **/.env
 **/state/
+**/logs/
+Ali PC Deployment/dist/
+.claude/
+Code migration/

@@ -1,54 +1,54 @@
-"""Local Demo/Asim rules engine for closed MT5 candles."""
+"""Histogram / X-Trend rules engine for closed MT5 M15 candles.
+
+This is the single source of truth for the trading rules. It is imported by
+the Ali PC bridge (bridge_trader.py) for live execution and by the GCP desk
+(server.py) for the /signal, /warmup and lab paper-trading endpoints. The two
+copies in the repo (Ali PC Deployment/runtime and Google Console
+Deployment/app) must stay byte-identical.
+
+Inputs per bar
+--------------
+  signal OHLC   Heikin-Ashi candle (histogram, body-break and X-Trend gates)
+  raw OHLC      broker candle (fills, stops, ATR)
+  hist          EMA(WilderRSI(raw close, 3), 5) - 50
+  histcolor     green / red / orange as coloured by the bridge (HIST_THRESH)
+  xtrend        X-Trend line value (KJ GagaTrend on HA for Ali)
+
+Two entry modes (ENTRY_EVERY_CANDLE)
+------------------------------------
+  1 (live)  The PRIMARY gate - this candle breaks the previous HA body AND
+            sits fully clear of X-Trend - is evaluated on every green/red
+            candle. Each pass opens its own ticket, stacking in the run
+            direction up to MAXPOS. No amber arming, no supplementary logic.
+  0         Classic rules: amber must appear first, one primary per colour
+            run, then supplementary tickets on a raw wick break of the last
+            trade candle (MAX_SUPP).
+
+Exits (both modes)
+------------------
+  * per-ticket trailing stop that ratchets to each bar CLOSE, sized as
+    TSL_ATR_MULT x Wilder ATR(14) of raw bars at entry (fixed for the trade),
+    or TSL_TICKS x TSL_TICK_SIZE when the multiplier is 0
+  * amber/orange histogram flattens everything and resets the run
+  * margin stop-out below 50%
+
+Every tunable that the desk exposes as a live control is read from the
+environment at call time (effective_*), so a change saved on the dashboard
+applies on the next bar without a process restart.
+"""
 
 from __future__ import annotations
 
-
-
 import copy
-
-import json
-
 import os
-
-import threading
-
 from collections import OrderedDict
-
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 
-from datetime import datetime, timezone, timedelta
 
-from pathlib import Path
-
-from typing import List, Optional
-
-API_KEY = os.environ.get('API_KEY', '')
-
-DEFAULT_VOLUME = float(os.environ.get('VOLUME', '0.01'))
-
-SYMBOL = os.environ.get('SYMBOL', 'XAUUSD')
-
-MODEL_LABEL = os.environ.get('MODEL_NAME', 'Demo Trading')
-
-TH = float(os.environ.get('HIST_THRESH', '10'))
-
-LEVERAGE = float(os.environ.get('LEVERAGE', '100'))
-
-MARGIN_MIN = float(os.environ.get('MARGIN_MIN_PCT', '75')) / 100.0
-
-MAXPOS = int(os.environ.get('MAXPOS', '20'))
-
-MAX_SUPP = int(os.environ.get('MAX_SUPP', '10'))
-
-# Playbook A: 0.25-pt trail. Broker min-stop applied only on MT5 SL place/modify.
-_TSL_DESIRED = float(os.environ.get('TSL_PTS', '0.25'))
-
-BROKER_MIN_STOP_PTS = float(os.environ.get('BROKER_MIN_STOP_PTS', '0.30'))
-
-TSL_PTS = _TSL_DESIRED
-
-STOP_SLIPPAGE_PTS = float(os.environ.get('STOP_SLIPPAGE_PTS', '0'))
-
+# --------------------------------------------------------------------------- #
+# Environment helpers - read live so dashboard controls apply without restart #
+# --------------------------------------------------------------------------- #
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -57,145 +57,173 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
-def effective_tsl_pts() -> float:
-    """Read TSL live so dashboard controls apply without process restart.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(float(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return int(default)
 
-    NOTE: this is now used ONLY by entry-fill logic (_cross_fill). The stop
-    itself is percentage-based - see effective_tsl_pct/tsl_distance. Keeping
-    the two separate means widening the stop cannot silently move where
-    entries fill.
-    """
-    return _env_float('TSL_PTS', 0.25)
+
+def _env_flag(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def effective_volume() -> float:
+    """Lot size for new tickets (VOLUME). The bridge sends this as the order volume."""
+    lot = _env_float("VOLUME", 0.01)
+    return lot if lot > 0 else 0.01
+
+
+def effective_hist_thresh() -> float:
+    """Histogram colour threshold: green >= +TH, red <= -TH, amber between."""
+    return _env_float("HIST_THRESH", 10.0)
+
+
+def effective_maxpos() -> int:
+    return max(1, _env_int("MAXPOS", 20))
+
+
+def effective_max_supp() -> int:
+    return max(0, _env_int("MAX_SUPP", 10))
+
+
+def effective_xt_gate() -> bool:
+    """Primary entries must sit fully clear of the X-Trend line."""
+    return _env_flag("XTREND_GATE", "1")
+
+
+def effective_xt_gate_supp() -> bool:
+    """Classic-mode SUPP entries also need X-Trend clearance. Default OFF."""
+    return _env_flag("XTREND_GATE_SUPP", "0")
+
+
+def effective_xt_buf() -> float:
+    """Extra clearance demanded beyond a true touch of X-Trend (price units)."""
+    return _env_float("XTREND_BUF", 0.0)
+
+
+def effective_spread_cost() -> float:
+    """Flat cost booked against the paper balance per fill (USD)."""
+    return _env_float("SPREAD_COST", 0.06)
+
+
+def effective_stop_slippage() -> float:
+    """Adverse fill beyond a touched stop, price units. 0 = fill at the stop."""
+    return _env_float("STOP_SLIPPAGE_PTS", 0.0)
+
+
+def effective_disable_stop_loss() -> bool:
+    """When ON the engine never stop-tests; only amber / margin exits remain."""
+    return _env_flag("DISABLE_STOP_LOSS", "0")
+
+
+def effective_best_lot_mult() -> float:
+    return _env_float("BEST_LOT_MULT", 1.0)
+
+
+def effective_tsl_pts() -> float:
+    """Entry-fill geometry only (gap-open tolerance in _cross_fill). Not a stop."""
+    return _env_float("TSL_PTS", 0.25)
 
 
 def effective_tick_size() -> float:
-    """Price value of one tick. XAUUSDm quotes 3 decimals, so 1 tick = 0.001.
-
-    Taken from the broker's trade_tick_size, not assumed: a 2-decimal feed
-    would make 1 tick 0.01 and every distance below would be 10x too big.
-    """
-    size = _env_float('TSL_TICK_SIZE', 0.001)
+    """Price value of one tick. XAUUSDm quotes 3 decimals, so 1 tick = 0.001."""
+    size = _env_float("TSL_TICK_SIZE", 0.001)
     return size if size > 0 else 0.001
 
 
 def effective_tsl_ticks() -> float:
-    """Trailing stop distance in TICKS. This is the authoritative setting.
-
-    1111 ticks x 0.001 = $1.111 of gold movement. For scale: the spread is
-    about $0.26, so this sits roughly 4x spread away. It is a FIXED distance -
-    unlike the percentage stop it replaced, it does not rescale as gold moves,
-    so its meaning in percent drifts with price (~0.026% at 4325).
-
-    Read live so dashboard controls apply without a process restart.
-    """
-    ticks = _env_float('TSL_TICKS', 1111.0)
+    """Fallback trailing distance in ticks when TSL_ATR_MULT is 0 (1111 = $1.111)."""
+    ticks = _env_float("TSL_TICKS", 1111.0)
     return ticks if ticks > 0 else 1111.0
 
 
-def effective_tsl_pct() -> float:
-    """What the tick distance works out to as a percent of `price`.
-
-    Reporting only - nothing sizes a stop from this any more. Kept so the
-    dashboard and logs can still show a percentage for comparison.
-    """
-    return _env_float('TSL_PCT', 0.25)
-
-
-def tsl_distance(price: float = 0.0) -> float:
-    """Price distance of the trailing stop, in instrument units.
-
-    Fixed tick distance, so `price` is accepted but unused; the parameter stays
-    so every existing call site keeps working unchanged.
-    """
+def tsl_distance() -> float:
+    """Fixed trailing distance in price units: TSL_TICKS x TSL_TICK_SIZE."""
     return effective_tsl_ticks() * effective_tick_size()
 
 
+def effective_tsl_atr_mult() -> float:
+    """Stop = mult x Wilder ATR(14) of raw M15 bars at entry, fixed per trade.
+
+    A fixed tick distance only works while volatility stays where it was
+    tuned; the walk-forward test rewarded the ratio, not the dollar figure.
+    0 = use the fixed tick distance.
+    """
+    return _env_float("TSL_ATR_MULT", 0.0)
+
+
+def effective_every_candle() -> bool:
+    return _env_flag("ENTRY_EVERY_CANDLE", "0")
+
+
 def effective_trail_every_candle() -> bool:
-    return os.environ.get('TRAIL_EVERY_CANDLE', '1').strip().lower() in ('1', 'true', 'yes', 'on')
-
-
-def effective_entry_bar_mode() -> str:
-    mode = os.environ.get('ENTRY_BAR_MODE', 'defer').strip().lower()
-    return mode if mode in ('off', 'test', 'defer') else 'defer'
-
-
-def effective_supp_xt_gate() -> bool:
-    """X-Trend gate for SUPP entries. Default OFF: SUPP only needs the trade-wick break."""
-    return os.environ.get('XTREND_GATE_SUPP', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+    return _env_flag("TRAIL_EVERY_CANDLE", "1")
 
 
 def effective_trail_entry_bar() -> bool:
-    """Trail the stop to the entry bar's close. Default ON.
+    """Trail the stop to the entry bar's close.
 
-    The entry bar is never stop-TESTED (the wick that filled the trade must not
-    kill it), but its close must still move the stop. With this OFF the stop
-    stays at entry +/- TSL into the next bar, so any retrace closes the trade
+    The entry bar is never stop-TESTED (the wick that filled the trade must
+    not kill it) but its close must still move the stop; otherwise the stop
+    sits at entry +/- TSL into the next bar and any retrace closes the trade
     for exactly -(TSL + slippage) - spread.
     """
-    return os.environ.get('TRAIL_ENTRY_BAR', '1').strip().lower() in ('1', 'true', 'yes', 'on')
+    return _env_flag("TRAIL_ENTRY_BAR", "1")
+
+
+def effective_entry_bar_mode() -> str:
+    """off / test / defer - whether the entry bar's own range can stop the trade."""
+    mode = os.environ.get("ENTRY_BAR_MODE", "defer").strip().lower()
+    return mode if mode in ("off", "test", "defer") else "defer"
 
 
 def effective_skip_weekends() -> bool:
-    """Live-readable weekend filter (dashboard / .env without restart)."""
-    return os.environ.get('SKIP_WEEKENDS', '1').strip().lower() in ('1', 'true', 'yes', 'on')
+    return _env_flag("SKIP_WEEKENDS", "1")
 
 
-CONTRACT = 100.0
+def effective_skip_worst_hours() -> bool:
+    return _env_flag("SKIP_WORST_HOURS", "0")
 
-STOPOUT = 0.5
 
-BEST_LOT_MULT = float(os.environ.get('BEST_LOT_MULT', '1.0'))
+def effective_focus_best_hours() -> bool:
+    return _env_flag("FOCUS_BEST_HOURS", "0")
 
-SPREAD_COST = float(os.environ.get('SPREAD_COST', '0.06'))
 
-STATE_FILE = Path(os.environ.get('STATE_FILE', '/opt/demo-trading/state.json'))
+# Account model (not desk controls - fixed per deployment).
+CONTRACT = 100.0          # XAUUSD: 1.00 lot = 100 oz
+STOPOUT = 0.5             # margin level below which everything is flattened
+LEVERAGE = _env_float("LEVERAGE", 100.0)
+MARGIN_MIN = _env_float("MARGIN_MIN_PCT", 75.0) / 100.0
+START_BALANCE = _env_float("START_BALANCE", 100.0)
+MAX_SEEN_BARS = 2048      # duplicate-bar cache size
+ATR_PERIOD = 14
 
-MAX_SEEN_BARS = 2048
-
+# Hour filters (UTC-4 clock). Both OFF on the Ali desk.
 WORST_HOURS_UTC4 = {0, 3, 5, 17, 18}
-
 BEST_HOURS_UTC4 = {2, 9, 10, 11, 19, 21}
-
 HOUR_TZ_OFFSET = -4
 
-START_BALANCE = float(os.environ.get('START_BALANCE', '100'))
 
-SKIP_WORST_HOURS = os.environ.get('SKIP_WORST_HOURS', '0').strip().lower() in ('1', 'true', 'yes', 'on')
-
-FOCUS_BEST_HOURS = os.environ.get('FOCUS_BEST_HOURS', '0').strip().lower() in ('1', 'true', 'yes', 'on')
-
-SKIP_WEEKENDS = os.environ.get('SKIP_WEEKENDS', '1').strip().lower() in ('1', 'true', 'yes', 'on')
-
-XT_GATE = os.environ.get('XTREND_GATE', '1').strip().lower() in ('1', 'true', 'yes', 'on')
-
-# SUPP X-Trend gate is separate and OFF by default (SUPP only needs the trade-wick break).
-XT_GATE_SUPP = effective_supp_xt_gate()
-
-XT_BUF = float(os.environ.get('XTREND_BUF', '0'))
-
-PRIMARY_WICK_GATE = os.environ.get('PRIMARY_WICK_GATE', '0').strip().lower() in ('1', 'true', 'yes', 'on')
-
-ENTRY_BAR_MODE = effective_entry_bar_mode()
-
-# Trail every closed candle by default so winners lock in; override with TRAIL_EVERY_CANDLE=0.
-TRAIL_EVERY_CANDLE = effective_trail_every_candle()
-
-# When enabled, positions exit only on orange histogram (or margin stop), not broker SL.
-DISABLE_STOP_LOSS = os.environ.get('DISABLE_STOP_LOSS', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+# --------------------------------------------------------------------------- #
+# Small pure helpers                                                           #
+# --------------------------------------------------------------------------- #
 
 def body_high(o: float, c: float) -> float:
     return o if o >= c else c
 
+
 def body_low(o: float, c: float) -> float:
     return c if o >= c else o
 
-def _parse_local_dt_utc4(time_str: Optional[str]) -> Optional[datetime]:
+
+def _parse_local_dt_utc4(time_str: str | None) -> datetime | None:
     if not time_str:
         return None
     try:
-        ts = str(time_str).strip().replace('Z', '+00:00')
-        if 'T' not in ts and ' ' in ts:
-            ts = ts.replace(' ', 'T', 1)
+        ts = str(time_str).strip().replace("Z", "+00:00")
+        if "T" not in ts and " " in ts:
+            ts = ts.replace(" ", "T", 1)
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -203,160 +231,111 @@ def _parse_local_dt_utc4(time_str: Optional[str]) -> Optional[datetime]:
     except Exception:
         return None
 
-def _parse_hour_utc4(time_str: Optional[str]) -> Optional[int]:
+
+def _parse_hour_utc4(time_str: str | None) -> int | None:
     local = _parse_local_dt_utc4(time_str)
     return None if local is None else int(local.hour)
 
-def is_weekend_bar(time_str: Optional[str]) -> bool:
-    """True when bar local time (UTC-4) falls on Saturday or Sunday."""
+
+def is_weekend_bar(time_str: str | None) -> bool:
     local = _parse_local_dt_utc4(time_str)
-    if local is None:
-        return False
-    return local.weekday() >= 5
+    return local is not None and local.weekday() >= 5
 
-def hour_allowed(hour: Optional[int], skip_worst: bool) -> bool:
-    if hour is None:
-        return True
-    if skip_worst and hour in WORST_HOURS_UTC4:
-        return False
-    return True
 
-def lot_for_hour(hour: Optional[int], focus_best: bool, base_lot: float) -> float:
-    if focus_best and hour is not None and (hour in BEST_HOURS_UTC4):
-        return base_lot * BEST_LOT_MULT
+def hour_allowed(hour: int | None, skip_worst: bool) -> bool:
+    return hour is None or not (skip_worst and hour in WORST_HOURS_UTC4)
+
+
+def lot_for_hour(hour: int | None, focus_best: bool, base_lot: float) -> float:
+    if focus_best and hour is not None and hour in BEST_HOURS_UTC4:
+        return base_lot * effective_best_lot_mult()
     return base_lot
 
-def _auth(x_api_key: Optional[str]):
-    if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail='bad api key')
-
-def _validate_raw_group(candles: 'List[Candle]') -> None:
-    """Reject a partial raw_* group as a 400, not an unhandled 500."""
-    for c in candles:
-        vals = (c.raw_open, c.raw_high, c.raw_low, c.raw_close)
-        if any((v is not None for v in vals)) and (not all((v is not None for v in vals))):
-            raise HTTPException(status_code=400, detail='raw_open, raw_high, raw_low and raw_close must be sent together')
 
 def zone(h: float) -> int:
-    if h >= TH:
+    th = effective_hist_thresh()
+    if h >= th:
         return 1
-    if h <= -TH:
+    if h <= -th:
         return -1
     return 0
 
-def zone_from_sent(hist: float, color: Optional[str]) -> tuple[int, str]:
-    c = str(color or '').strip().lower()
-    if c in ('green', 'g'):
-        return (1, 'green')
-    if c in ('red', 'r'):
-        return (-1, 'red')
-    if c in ('orange', 'o', 'amber', 'a'):
-        return (0, 'orange')
+
+def zone_from_sent(hist: float, color: str | None) -> tuple[int, str]:
+    """Prefer the colour the bridge sent; fall back to the threshold."""
+    c = str(color or "").strip().lower()
+    if c in ("green", "g"):
+        return 1, "green"
+    if c in ("red", "r"):
+        return -1, "red"
+    if c in ("orange", "o", "amber", "a"):
+        return 0, "orange"
     zz = zone(float(hist))
-    name = 'green' if zz > 0 else 'red' if zz < 0 else 'orange'
-    return (zz, name)
+    return zz, "green" if zz > 0 else "red" if zz < 0 else "orange"
+
 
 def ha_side(o: float, c: float) -> int:
     """+1 green HA (close > open), -1 red HA, 0 doji."""
-    if c > o:
-        return 1
-    if c < o:
-        return -1
-    return 0
+    return 1 if c > o else -1 if c < o else 0
 
 
-def explain_decision(
-    code: str,
-    *,
-    action: str = "NONE",
-    zone: str = "",
-    hist: float | None = None,
-    seen_amber: bool = False,
-    n_total: int = 0,
-    xtrend: float | None = None,
-    xt_gate: bool = True,
-    trail: bool = False,
-    tsl: float = 0.25,
-) -> str:
-    """Human-readable bar reason aligned with Demo/Asim live trading rules."""
+def explain_decision(code: str, *, action: str = "NONE", zone: str = "",
+                     hist: float | None = None, seen_amber: bool = False,
+                     n_total: int = 0, xtrend: float | None = None) -> str:
+    """Human-readable reason for the desk's Why column, matching the active mode."""
     z = str(zone or "").lower()
-    hist_s = f"{float(hist):.2f}" if hist is not None else "—"
-    xt_s = f"{float(xtrend):.3f}" if xtrend is not None else "—"
+    hist_s = f"{float(hist):.2f}" if hist is not None else "-"
+    xt_s = f"{float(xtrend):.3f}" if xtrend is not None else "-"
     code_u = str(code or "NO_ENTRY_SIGNAL").upper()
-    rules = (
-        "Rules: amber arm first → green/red must break previous body → "
-        f"{'X-Trend must be clear' if xt_gate else 'X-Trend gate OFF'} → "
-        f"{'trail every candle at ' + str(tsl) + ' pt' if trail else 'trail-every-candle OFF'} → "
-        "amber flattens open positions."
-    )
+    every = effective_every_candle()
+    mult = effective_tsl_atr_mult()
+    stop_s = f"{mult:g} x ATR(14)" if mult > 0 else f"{effective_tsl_ticks():g} ticks"
+    if every:
+        rules = (f"Rules: every green/red candle that breaks the previous body and "
+                 f"{'clears X-Trend' if effective_xt_gate() else 'X-Trend gate OFF'} opens a ticket "
+                 f"(stack to {effective_maxpos()}); stop {stop_s} trails each close; amber flattens.")
+    else:
+        rules = (f"Rules: amber arms -> primary on body break "
+                 f"{'+ X-Trend clear' if effective_xt_gate() else '(X-Trend gate OFF)'} -> "
+                 f"SUPP on last-trade wick break; stop {stop_s} trails each close; amber flattens.")
     mapping = {
-        "SKIP_WEEKEND_MARKET_CLOSED": "No trade — weekend market closed (skip-weekends rule).",
+        "SKIP_WEEKEND_MARKET_CLOSED": "No trade - weekend market closed (skip-weekends rule).",
         "WAITING_FOR_AMBER_ARM": (
-            f"No trade — hist {hist_s} ({z or 'colour'}) but engine is not amber-armed yet. "
-            "Must see an amber/orange bar after the last primary before the next entry."
-        ),
+            f"No trade - hist {hist_s} ({z or 'colour'}) but the engine is not amber-armed yet."),
         "AMBER_ARM_OR_FLAT": (
-            f"No new entry — amber/orange hist {hist_s} arms the engine and flattens any open run. "
-            "Waiting for the next green/red body-break that clears X-Trend."
-        ),
+            f"No new entry - amber hist {hist_s} flattens any open run and resets the trail."),
         "SKIP_PRIMARY_PREVIOUS_BODY_GATE": (
-            f"No primary — hist {hist_s} ({z}) but price did not break the previous candle body "
-            "(entry rule: prev_body_cross)."
-        ),
-        "SKIP_SUPPLEMENTARY_PREVIOUS_BODY_GATE": (
-            f"No SUPP — hist {hist_s} ({z}) but price did not break the previous candle body."
-        ),
-        "SKIP_SUPPLEMENTARY_NO_TRADE_WICK": (
-            "No SUPP — no last-trade candle wick level stored yet."
-        ),
-        "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE": (
-            "No SUPP — next candle did not break the wick of the candle where the last trade was taken."
-        ),
+            f"No entry - hist {hist_s} ({z}) but this candle did not break the previous body."),
         "SKIP_PRIMARY_XTREND_GATE": (
-            f"No primary — candle touches/crosses X-Trend ({xt_s}). Whole candle must sit clear of XT."
-        ),
-        "SKIP_SUPPLEMENTARY_XTREND_GATE": (
-            f"No SUPP — candle touches/crosses X-Trend ({xt_s}). SUPP XT gate is ON (XTREND_GATE_SUPP=1)."
-        ),
-        "SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_BUY": (
-            "No BUY SUPP — close did not progress above the last trade candle close."
-        ),
-        "SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_SELL": (
-            "No SELL SUPP — close did not progress below the last trade candle close."
-        ),
-        "REJECTED_LOCAL_RISK_OR_MAXPOS": "No trade — blocked by margin/risk or max open positions.",
-        "REJECTED_MAX_SUPPLEMENTARY_POSITIONS": "No SUPP — already at max supplementary positions.",
-        "ORANGE_HISTOGRAM_EXIT": "Exit — amber/orange histogram flattens the open run and resets trailing stops.",
-        "HOLDING_MANAGE_TRAIL": (
-            f"Holding {n_total} unit(s); managing stops"
-            f"{' / trailing every candle' if trail else ''}. No new entry on this bar."
-        ),
-        "NO_ENTRY_SIGNAL": (
-            f"No trade — hist {hist_s} ({z or '—'}), amber_armed={seen_amber}. "
-            "Primary needs body-break + XT-clear; SUPP needs break of last trade candle wick only."
-        ),
-        "NO_ACTION": (
-            f"No trade — hist {hist_s} ({z or '—'}), amber_armed={seen_amber}. "
-            "Primary needs body-break + XT-clear; SUPP needs break of last trade candle wick."
-        ),
+            f"No entry - candle touches/crosses X-Trend ({xt_s}); the whole candle must sit clear."),
+        "SKIP_SUPPLEMENTARY_NO_TRADE_WICK": "No SUPP - no last-trade wick level stored yet.",
+        "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE": "No SUPP - this candle did not break the last trade candle's wick.",
+        "SKIP_SUPPLEMENTARY_XTREND_GATE": f"No SUPP - candle touches X-Trend ({xt_s}) and XTREND_GATE_SUPP is ON.",
+        "SKIP_OPPOSITE_SIDE_OPEN": (
+            f"No entry - hist {hist_s} ({z}) is the opposite colour to the open run; wait for amber."),
+        "REJECTED_LOCAL_RISK_OR_MAXPOS": "No trade - blocked by margin/risk or max open positions.",
+        "REJECTED_MAX_SUPPLEMENTARY_POSITIONS": "No SUPP - already at max supplementary positions.",
+        "ORANGE_HISTOGRAM_EXIT": "Exit - amber histogram flattens the open run and resets trailing stops.",
+        "MARGIN_STOPOUT": "Exit - margin level fell below the stop-out floor; everything flattened.",
+        "HOLDING_MANAGE_TRAIL": f"Holding {n_total} ticket(s); trailing stops. No new entry on this bar.",
+        "NO_ENTRY_SIGNAL": f"No trade - hist {hist_s} ({z or '-'}); no entry gate passed on this bar.",
     }
     if code_u.startswith("STOP_EXIT_"):
-        n = code_u.replace("STOP_EXIT_", "")
-        text = f"Stop exit — {n} unit(s) hit trailing/protective stop on this bar."
+        text = f"Stop exit - {code_u.replace('STOP_EXIT_', '')} ticket(s) hit the trailing stop on this bar."
     elif code_u.startswith("ENTRY_FILLED_"):
         side = code_u.replace("ENTRY_FILLED_", "")
-        kind = "primary" if side in ("BUY", "SELL") else "supplementary"
-        text = (
-            f"Trade taken — filled {side} ({kind}). "
-            f"Hist {hist_s} ({z}); amber was armed; previous-body break + XT clear passed."
-        )
+        kind = "primary" if side in ("BUY", "SELL") else ("stacked" if every else "supplementary")
+        text = f"Trade taken - filled {side} ({kind}). Hist {hist_s} ({z}); entry gate passed."
     elif code_u.startswith("SKIP_WORST_HOUR_"):
-        hr = code_u.replace("SKIP_WORST_HOUR_", "")
-        text = f"No trade — worst-hour filter blocked entries at UTC-4 hour {hr}."
+        text = f"No trade - worst-hour filter blocked entries at UTC-4 hour {code_u.replace('SKIP_WORST_HOUR_', '')}."
     else:
-        text = mapping.get(code_u, f"{code_u.replace('_', ' ').title()} — action={action}.")
+        text = mapping.get(code_u, f"{code_u.replace('_', ' ').title()} - action={action}.")
     return f"{text} {rules}"
 
+
+# --------------------------------------------------------------------------- #
+# Engine                                                                       #
+# --------------------------------------------------------------------------- #
 
 @dataclass
 class Position:
@@ -364,30 +343,30 @@ class Position:
     sl: float
     is_primary: bool
     lot: float
-    # Most favourable price this trade has seen since it opened: the high for a
-    # long, the low for a short. The trailing stop is always tsl_distance()
-    # behind it. Defaults to 0.0 so snapshots written before percentage
-    # trailing existed still restore via Position(**p); _seed_best() repairs it.
+    # Most favourable CLOSE seen since entry; the stop is always `tsl` behind it.
     best_price: float = 0.0
+    # Stop distance for this ticket, fixed at entry. 0.0 = global tick distance
+    # (what snapshots written before ATR stops restore to).
+    tsl: float = 0.0
+    # MT5 position ticket once the bridge has bound it, 0 until then. Lets the
+    # bridge modify / close the exact ticket and reconcile broker-side closes.
+    ticket: int = 0
 
-@dataclass
-class Pending:
-    want: int
-    is_primary: bool
-    signal_break_level: float
-    lot: float
 
 class LatestModsEngine:
     """
-    seen_amber     amber has appeared since last primary
-    run_side       +1 buy primary already taken this run; -1 sell; 0 none
-    break_level    last filled trade wick (display only)
-    last_trade_close close of the last candle that created a trade
-    prev_open/close previous candle body used for the cross and the fill
+    pos              +1 long run, -1 short run, 0 flat
+    positions        open tickets, oldest first (the primary is index 0 while alive)
+    run_side         classic mode: side of the primary taken this colour run
+    seen_amber       classic mode: amber seen since the last primary (arms the next one)
+    break_level      classic mode: raw wick of the last trade candle (SUPP trigger)
+    prev_*           previous HA candle (body-break gate and primary fill level)
     """
 
     def __init__(self):
         self.reset()
+
+    # ---- state -----------------------------------------------------------
 
     def reset(self):
         self.prev_high: float | None = None
@@ -400,143 +379,178 @@ class LatestModsEngine:
         self.last_trade_close: float | None = None
         self.seen_amber = False
         self.run_side = 0
-        self.pending: Pending | None = None
         self.warmed = False
         self.balance = START_BALANCE
         self.hist = 0.0
-        self.skip_worst_hours = SKIP_WORST_HOURS
-        self.focus_best_hours = FOCUS_BEST_HOURS
+        self.skip_worst_hours = effective_skip_worst_hours()
+        self.focus_best_hours = effective_focus_best_hours()
         self.hour_skips = 0
         self.xt_skips = 0
         self.weekend_skips = 0
-        self._last_fill_lot = DEFAULT_VOLUME
-        self.last_execution_source = 'not_seen'
+        self._last_fill_lot = effective_volume()
+        self._atr, self._atr_n, self._prev_raw_close = 0.0, 0, None
+        self.last_execution_source = "not_seen"
         self.last_entry_reason: str | None = None
-        self._seen_bars: 'OrderedDict[str, dict]' = OrderedDict()
+        self._seen_bars: OrderedDict[str, dict] = OrderedDict()
 
     def snapshot(self) -> dict:
         """JSON-safe state used to survive service restarts."""
-        return {'prev_high': self.prev_high, 'prev_low': self.prev_low, 'prev_open': self.prev_open, 'prev_close': self.prev_close, 'pos': self.pos, 'positions': [asdict(p) for p in self.positions], 'break_level': self.break_level, 'last_trade_close': self.last_trade_close, 'seen_amber': self.seen_amber, 'run_side': self.run_side, 'pending': None if self.pending is None else asdict(self.pending), 'warmed': self.warmed, 'balance': self.balance, 'hist': self.hist, 'skip_worst_hours': self.skip_worst_hours, 'focus_best_hours': self.focus_best_hours, 'hour_skips': self.hour_skips, 'xt_skips': self.xt_skips, 'weekend_skips': self.weekend_skips, 'last_fill_lot': self._last_fill_lot, 'last_execution_source': self.last_execution_source, 'seen_bars': list(self._seen_bars.items())}
+        return {
+            "prev_high": self.prev_high, "prev_low": self.prev_low,
+            "prev_open": self.prev_open, "prev_close": self.prev_close,
+            "pos": self.pos,
+            "positions": [asdict(p) for p in self.positions],
+            "break_level": self.break_level,
+            "last_trade_close": self.last_trade_close,
+            "seen_amber": self.seen_amber, "run_side": self.run_side,
+            "warmed": self.warmed, "balance": self.balance, "hist": self.hist,
+            "hour_skips": self.hour_skips, "xt_skips": self.xt_skips,
+            "weekend_skips": self.weekend_skips,
+            "last_fill_lot": self._last_fill_lot,
+            "atr": float(self._atr), "atr_n": int(self._atr_n),
+            "prev_raw_close": self._prev_raw_close,
+            "last_execution_source": self.last_execution_source,
+            "seen_bars": list(self._seen_bars.items()),
+        }
 
     def restore(self, data: dict) -> None:
-        """Restore a validated snapshot; callers fall back to reset on error."""
-        self.prev_high = data.get('prev_high')
-        self.prev_low = data.get('prev_low')
-        self.prev_open = data.get('prev_open')
-        self.prev_close = data.get('prev_close')
-        self.pos = int(data.get('pos') or 0)
-        self.positions = [Position(**p) for p in data.get('positions') or []]
-        self.break_level = data.get('break_level')
-        saved_trade_close = data.get('last_trade_close')
-        self.last_trade_close = None if saved_trade_close is None else float(saved_trade_close)
-        self.seen_amber = bool(data.get('seen_amber'))
-        self.run_side = int(data.get('run_side') or 0)
-        pending = data.get('pending')
-        self.pending = Pending(**pending) if pending else None
-        self.warmed = bool(data.get('warmed'))
-        self.balance = float(data.get('balance', START_BALANCE))
-        self.hist = float(data.get('hist', 0.0))
-        self.skip_worst_hours = SKIP_WORST_HOURS
-        self.focus_best_hours = FOCUS_BEST_HOURS
-        self.hour_skips = int(data.get('hour_skips') or 0)
-        self.xt_skips = int(data.get('xt_skips') or 0)
-        self.weekend_skips = int(data.get('weekend_skips') or 0)
-        self._last_fill_lot = float(data.get('last_fill_lot', DEFAULT_VOLUME))
-        self.last_execution_source = str(data.get('last_execution_source') or 'not_seen')
-        self._seen_bars = OrderedDict(data.get('seen_bars') or [])
+        """Restore a snapshot; callers fall back to reset() on error."""
+        self.reset()
+        self.prev_high = data.get("prev_high")
+        self.prev_low = data.get("prev_low")
+        self.prev_open = data.get("prev_open")
+        self.prev_close = data.get("prev_close")
+        self.pos = int(data.get("pos") or 0)
+        known = {f for f in Position.__dataclass_fields__}
+        self.positions = [Position(**{k: v for k, v in p.items() if k in known})
+                          for p in data.get("positions") or []]
+        self.break_level = data.get("break_level")
+        ltc = data.get("last_trade_close")
+        self.last_trade_close = None if ltc is None else float(ltc)
+        self.seen_amber = bool(data.get("seen_amber"))
+        self.run_side = int(data.get("run_side") or 0)
+        self.warmed = bool(data.get("warmed"))
+        self.balance = float(data.get("balance", START_BALANCE))
+        self.hist = float(data.get("hist", 0.0))
+        self.hour_skips = int(data.get("hour_skips") or 0)
+        self.xt_skips = int(data.get("xt_skips") or 0)
+        self.weekend_skips = int(data.get("weekend_skips") or 0)
+        self._last_fill_lot = float(data.get("last_fill_lot", effective_volume()))
+        self._atr = float(data.get("atr") or 0.0)
+        self._atr_n = int(data.get("atr_n") or 0)
+        self._prev_raw_close = data.get("prev_raw_close")
+        self.last_execution_source = str(data.get("last_execution_source") or "not_seen")
+        self._seen_bars = OrderedDict(data.get("seen_bars") or [])
         while len(self._seen_bars) > MAX_SEEN_BARS:
             self._seen_bars.popitem(last=False)
+
+    # ---- broker reconciliation (used by the bridge) ------------------------
+
+    def bind_ticket(self, ticket: int) -> bool:
+        """Attach the MT5 position ticket to the newest unbound ticket."""
+        for p in reversed(self.positions):
+            if not p.ticket:
+                p.ticket = int(ticket)
+                return True
+        return False
+
+    def reconcile(self, alive_tickets: set[int], mark_price: float) -> list[dict]:
+        """Drop tickets the broker no longer holds (its SL fired, or a manual close).
+
+        The engine would otherwise keep trailing a ghost, report the wrong
+        stop, and its partial-close orders could hit a different live ticket.
+        Only bound tickets are checked; an unbound one may still be filling.
+        """
+        gone = [p for p in self.positions if p.ticket and p.ticket not in alive_tickets]
+        if not gone:
+            return []
+        records = []
+        for p in gone:
+            pnl = self._close_one(p, mark_price)
+            records.append({"ticket": p.ticket, "entry": p.entry, "exit": mark_price,
+                            "lot": p.lot, "pnl": round(pnl, 4),
+                            "reason": "broker_closed", "is_primary": p.is_primary})
+        self.positions = [p for p in self.positions if p not in gone]
+        if not self.positions:
+            self.pos = 0
+        return records
+
+    # ---- position maths ----------------------------------------------------
 
     def _n_total(self) -> int:
         return len(self.positions)
 
     def _n_primary(self) -> int:
-        return sum((1 for p in self.positions if p.is_primary))
+        return sum(1 for p in self.positions if p.is_primary)
 
     def _n_supp(self) -> int:
-        return sum((1 for p in self.positions if not p.is_primary))
+        return sum(1 for p in self.positions if not p.is_primary)
 
     def _floating(self, px: float) -> float:
-        tot = 0.0
-        for p in self.positions:
-            tot += (px - p.entry if self.pos > 0 else p.entry - px) * CONTRACT * p.lot
-        return tot
+        return sum((px - p.entry if self.pos > 0 else p.entry - px) * CONTRACT * p.lot
+                   for p in self.positions)
 
     def _used(self, px: float) -> float:
         if not self.positions or LEVERAGE <= 0:
             return 0.0
-        return sum((p.lot for p in self.positions)) * CONTRACT * px / LEVERAGE
+        return sum(p.lot for p in self.positions) * CONTRACT * px / LEVERAGE
 
     def _mlevel(self, px: float) -> float:
         u = self._used(px)
-        if u <= 0:
-            return 999.0
-        return (self.balance + self._floating(px)) / u
+        return 999.0 if u <= 0 else (self.balance + self._floating(px)) / u
 
     def _can_add(self, px: float, lot: float) -> bool:
-        if self._n_total() + 1 > MAXPOS:
+        if self._n_total() + 1 > effective_maxpos():
             return False
-        fee = SPREAD_COST
-        proj_used = self._used(px) + lot * CONTRACT * px / LEVERAGE
+        fee = effective_spread_cost()
+        need = lot * CONTRACT * px / LEVERAGE
         eq = self.balance + self._floating(px)
-        proj_eq = eq - fee
-        if proj_used > 0 and proj_eq / proj_used < MARGIN_MIN:
+        proj_used = self._used(px) + need
+        if proj_used > 0 and (eq - fee) / proj_used < MARGIN_MIN:
             return False
-        if eq - self._used(px) < lot * CONTRACT * px / LEVERAGE + fee:
-            return False
-        return True
+        return eq - self._used(px) >= need + fee
 
-    def _init_sl(self, entry: float, want: int) -> float:
-        """Opening stop: exactly tsl_distance() behind the fill."""
-        dist = tsl_distance(entry)
-        if want > 0:
-            return entry - dist
-        return entry + dist
+    def _update_atr(self, eh: float, el: float, ec: float) -> None:
+        """Wilder ATR(14) on raw bars; snapshotted so ATR stops survive a restart."""
+        prev_c = self._prev_raw_close
+        tr = (eh - el) if prev_c is None else max(eh - el, abs(eh - prev_c), abs(el - prev_c))
+        if self._atr_n < ATR_PERIOD:
+            self._atr = (self._atr * self._atr_n + tr) / (self._atr_n + 1)
+        else:
+            self._atr += (tr - self._atr) / ATR_PERIOD
+        self._atr_n += 1
+        self._prev_raw_close = ec
 
-    def _trail_sl(self, sl: float, best: float, side: int) -> float:
-        """Stop trailing `best` (the trade's most favourable price).
-
-        max/min keeps the stop monotonic: it only ever moves toward profit, so
-        a pullback that does not breach it leaves it where it is.
-        """
-        dist = tsl_distance(best)
-        if side > 0:
-            return max(sl, best - dist)
-        return min(sl, best + dist)
+    def _trade_tsl(self) -> float:
+        """Stop distance for a ticket opened now: ATR-sized if enabled and warmed."""
+        mult = effective_tsl_atr_mult()
+        if mult > 0 and self._atr_n >= ATR_PERIOD and self._atr > 0:
+            return mult * self._atr
+        return tsl_distance()
 
     @staticmethod
-    def _seed_best(p: 'Position', side: int) -> None:
-        """Backfill best_price for tickets restored from a pre-percentage snapshot."""
+    def _init_sl(entry: float, want: int, dist: float) -> float:
+        return entry - dist if want > 0 else entry + dist
+
+    def _advance_best(self, p: Position, close: float, side: int) -> None:
+        """Ratchet this ticket's stop behind its best CLOSE.
+
+        The close, not the bar extreme: a stop derived from a spike high can
+        sit above the market at the close (invalid for the broker) and
+        inflates backtests. max/min keeps the stop monotonic.
+        """
         if not p.best_price:
             p.best_price = p.entry
-
-    def _advance_best(self, p: 'Position', close: float, side: int) -> None:
-        """Extend this trade's best price, then re-derive its stop.
-
-        Trails the bar CLOSE, not the bar high/low. Trailing the extreme looks
-        tighter but places the stop on the wrong side of the market: a long
-        whose bar spiked to 4324 and closed at 4318 would get a stop at
-        4322.889 - above the market - which the broker rejects as an invalid
-        stop, or fills immediately. The close is where price actually is when
-        the bar completes, so a stop derived from it is always valid.
-
-        Runs per position: each ticket tracks only its own excursion, so one
-        trade closing never disturbs another's trail.
-        """
-        self._seed_best(p, side)
+        d = p.tsl or tsl_distance()
         if side > 0:
             p.best_price = max(p.best_price, float(close))
+            p.sl = max(p.sl, p.best_price - d)
         else:
             p.best_price = min(p.best_price, float(close))
-        p.sl = self._trail_sl(p.sl, p.best_price, side)
+            p.sl = min(p.sl, p.best_price + d)
 
     def _active_sl(self) -> float | None:
-        """The stop actually protecting the run, not just the primary's stop.
-
-        The primary is stopped out long before the supplementaries in most
-        runs, so reporting only its stop left `sl` null while tickets were
-        still live.
-        """
+        """The stop protecting the run: the primary's while it lives, else the tightest."""
         if not self.positions:
             return None
         primary = next((p for p in self.positions if p.is_primary), None)
@@ -545,68 +559,25 @@ class LatestModsEngine:
         stops = [p.sl for p in self.positions]
         return max(stops) if self.pos > 0 else min(stops)
 
-    def _clear_all(self) -> None:
-        self.positions = []
-        self.pos = 0
-        self.break_level = None
-        self.last_trade_close = None
-        self.pending = None
-
-    def _flatten(self, px: float) -> str:
-        self.balance += self._floating(px)
-        self._clear_all()
-        self.pending = None
-        return 'EXIT'
-
     def _close_one(self, p: Position, px: float) -> float:
         pnl = (px - p.entry if self.pos > 0 else p.entry - px) * CONTRACT * p.lot
         self.balance += pnl
         return pnl
 
-    def _do_open(self, fill_px: float, want: int, is_primary: bool, lot: float, signal_bl: float, trade_close: float | None = None) -> str:
-        if not self._can_add(fill_px, lot):
-            self.last_entry_reason = 'REJECTED_LOCAL_RISK_OR_MAXPOS'
-            return 'NONE'
-        if is_primary:
-            self.pos = want
-            self.run_side = want
-            self.seen_amber = False
-            self.positions = [Position(entry=fill_px, sl=self._init_sl(fill_px, want), is_primary=True, lot=lot, best_price=fill_px)]
-            self._last_fill_lot = lot
-            self.balance -= SPREAD_COST
-            self.break_level = signal_bl
-            self.last_trade_close = trade_close
-            return 'BUY' if want > 0 else 'SELL'
-        if self.pos == 0:
-            self.pos = self.run_side if self.run_side else want
-        if self._n_supp() >= MAX_SUPP:
-            self.last_entry_reason = 'REJECTED_MAX_SUPPLEMENTARY_POSITIONS'
-            return 'HOLD'
-        side = self.pos
-        self.positions.append(Position(entry=fill_px, sl=self._init_sl(fill_px, side), is_primary=False, lot=lot, best_price=fill_px))
-        self.break_level = signal_bl
-        self.last_trade_close = trade_close
-        self._last_fill_lot = lot
-        self.balance -= SPREAD_COST
-        return 'BUY_ADD' if side > 0 else 'SELL_ADD'
+    def _flatten(self, px: float) -> str:
+        self.balance += self._floating(px)
+        self.positions = []
+        self.pos = 0
+        self.break_level = None
+        self.last_trade_close = None
+        return "EXIT"
+
+    # ---- entry gates -------------------------------------------------------
 
     def _xt_clear(self, h: float, l: float, xt: float, want: int) -> bool:
-        # Playbook: whole candle must sit clear of X-Trend (wick on line → skip).
-        if want > 0:
-            return l > xt + XT_BUF
-        return h < xt - XT_BUF
-
-    def _xt_touch(self, h: float, l: float, xt: float) -> bool:
-        """True when this candle's range touches / crosses the X-Trend line."""
-        return (l - XT_BUF) <= xt <= (h + XT_BUF)
-
-    def _ha_matches(self, o: float, c: float, want: int) -> bool:
-        return ha_side(o, c) == want
-
-    def _broke_wick(self, h: float, l: float, level: float, want: int) -> bool:
-        if want > 0:
-            return h > level
-        return l < level
+        """Whole candle (wick included) must sit clear of X-Trend."""
+        buf = effective_xt_buf()
+        return l > xt + buf if want > 0 else h < xt - buf
 
     def _broke_prev_body(self, h: float, l: float, want: int) -> bool:
         if self.prev_open is None or self.prev_close is None:
@@ -615,132 +586,190 @@ class LatestModsEngine:
             return h > body_high(self.prev_open, self.prev_close)
         return l < body_low(self.prev_open, self.prev_close)
 
-    def _cross_fill(self, want: int, eo: float, eh: float | None=None, el: float | None=None) -> float:
-        tsl = effective_tsl_pts()
+    def _cross_fill(self, want: int, eo: float, eh: float, el: float) -> float:
+        """Primary fill: the previous body level, or this raw open if it gapped through."""
+        tol = effective_tsl_pts()
         if want > 0:
             lvl = body_high(self.prev_open, self.prev_close)
-            if eo > lvl:
-                return eo
-            if el is not None and abs(el - eo) < 1e-09 and (eo < lvl - tsl):
+            if eo > lvl or (abs(el - eo) < 1e-9 and eo < lvl - tol):
                 return eo
             return lvl
         lvl = body_low(self.prev_open, self.prev_close)
-        if eo < lvl:
-            return eo
-        if eh is not None and abs(eh - eo) < 1e-09 and (eo > lvl + tsl):
+        if eo < lvl or (abs(eh - eo) < 1e-9 and eo > lvl + tol):
             return eo
         return lvl
 
-    def _wick_fill(self, want: int, eo: float, level: float) -> float:
-        """SUPP fill at last-trade wick level (or this open if already through)."""
-        if want > 0:
-            return eo if eo > level else float(level)
-        return eo if eo < level else float(level)
-
-    def _entry_ok(self, o: float, h: float, l: float, c: float, xt: float, want: int, level: float, is_primary: bool=False, trade_close: float | None=None) -> bool:
-        # Primary: previous-body break + X-Trend clear.
-        # SUPP: only break the wick of the candle where the last trade was taken (no XT gate).
+    def _entry_ok(self, h: float, l: float, xt: float, want: int, level: float | None,
+                  is_primary: bool) -> bool:
         if is_primary:
             if not self._broke_prev_body(h, l, want):
-                self.last_entry_reason = 'SKIP_PRIMARY_PREVIOUS_BODY_GATE'
+                self.last_entry_reason = "SKIP_PRIMARY_PREVIOUS_BODY_GATE"
                 return False
-            if XT_GATE and (not self._xt_clear(h, l, xt, want)):
+            if effective_xt_gate() and not self._xt_clear(h, l, xt, want):
                 self.xt_skips += 1
-                self.last_entry_reason = 'SKIP_PRIMARY_XTREND_GATE'
+                self.last_entry_reason = "SKIP_PRIMARY_XTREND_GATE"
                 return False
             return True
         if level is None:
-            self.last_entry_reason = 'SKIP_SUPPLEMENTARY_NO_TRADE_WICK'
+            self.last_entry_reason = "SKIP_SUPPLEMENTARY_NO_TRADE_WICK"
             return False
-        if not self._broke_wick(h, l, float(level), want):
-            self.last_entry_reason = 'SKIP_SUPPLEMENTARY_TRADE_WICK_GATE'
+        broke = h > float(level) if want > 0 else l < float(level)
+        if not broke:
+            self.last_entry_reason = "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE"
             return False
-        # Optional: XTREND_GATE_SUPP=1 also demands the candle sit clear of X-Trend.
-        if effective_supp_xt_gate() and (not self._xt_clear(h, l, xt, want)):
+        if effective_xt_gate_supp() and not self._xt_clear(h, l, xt, want):
             self.xt_skips += 1
-            self.last_entry_reason = 'SKIP_SUPPLEMENTARY_XTREND_GATE'
+            self.last_entry_reason = "SKIP_SUPPLEMENTARY_XTREND_GATE"
             return False
         return True
 
-    def _open_on_cross(self, want: int, is_primary: bool, lot: float, h: float, l: float, eo: float, trade_close: float | None = None, execution_price: float | None = None) -> str:
+    # ---- opens -------------------------------------------------------------
+
+    def _open_ticket(self, fill_px: float, want: int, is_primary: bool, lot: float,
+                     signal_bl: float, trade_close: float | None) -> str:
+        """Append one ticket. A primary also starts the run (pos / run_side)."""
+        if not self._can_add(fill_px, lot):
+            self.last_entry_reason = "REJECTED_LOCAL_RISK_OR_MAXPOS"
+            return "NONE"
+        if is_primary:
+            self.pos = want
+            self.run_side = want
+            self.seen_amber = False
+            self.positions = []
+        else:
+            if self.pos == 0:
+                self.pos = self.run_side or want
+            if not effective_every_candle() and self._n_supp() >= effective_max_supp():
+                self.last_entry_reason = "REJECTED_MAX_SUPPLEMENTARY_POSITIONS"
+                return "HOLD"
+        side = self.pos
+        d = self._trade_tsl()
+        self.positions.append(Position(entry=fill_px, sl=self._init_sl(fill_px, side, d),
+                                       is_primary=is_primary, lot=lot, best_price=fill_px, tsl=d))
+        self.break_level = signal_bl
+        self.last_trade_close = trade_close
+        self._last_fill_lot = lot
+        self.balance -= effective_spread_cost()
+        if is_primary:
+            return "BUY" if side > 0 else "SELL"
+        return "BUY_ADD" if side > 0 else "SELL_ADD"
+
+    def _open_primary(self, want: int, lot: float, h: float, l: float, eo: float, eh: float,
+                      el: float, trade_close: float | None, execution_price: float | None) -> str:
+        fill_px = float(execution_price) if execution_price is not None else self._cross_fill(want, eo, eh, el)
+        return self._open_ticket(fill_px, want, True, lot, h if want > 0 else l, trade_close)
+
+    def _open_supp(self, want: int, lot: float, eh: float, el: float, eo: float,
+                   trade_close: float | None, execution_price: float | None) -> str:
+        if self.break_level is None:
+            self.last_entry_reason = "SKIP_SUPPLEMENTARY_NO_TRADE_WICK"
+            return "NONE"
         if execution_price is not None:
             fill_px = float(execution_price)
-        elif is_primary:
-            fill_px = self._cross_fill(want, eo, h, l)
         else:
-            if self.break_level is None:
-                self.last_entry_reason = 'SKIP_SUPPLEMENTARY_NO_TRADE_WICK'
-                return 'NONE'
-            fill_px = self._wick_fill(want, eo, float(self.break_level))
-        sig_bl = h if want > 0 else l
-        return self._do_open(fill_px, want, is_primary, lot, sig_bl, trade_close)
+            lvl = float(self.break_level)
+            fill_px = eo if (eo > lvl if want > 0 else eo < lvl) else lvl
+        return self._open_ticket(fill_px, want, False, lot, eh if want > 0 else el, trade_close)
 
-    def _scan_stops(self, eh: float, el: float, eo: float, has_raw_execution: bool, only: list[Position] | None=None):
-        sl_exits = 0
-        primary_closed = False
-        closed_primary: dict | None = None
-        closed_supps: list[dict] = []
-        if DISABLE_STOP_LOSS or self._n_total() == 0:
-            return (sl_exits, primary_closed, closed_primary, closed_supps)
-        check_ids = None if only is None else {id(p) for p in only}
+    def _open_stack(self, want: int, lot: float, h: float, l: float, eo: float, eh: float,
+                    el: float, trade_close: float | None, execution_price: float | None) -> str:
+        """ENTRY_EVERY_CANDLE fill: primary gate, stacking semantics."""
+        if self._n_total() == 0:
+            return self._open_primary(want, lot, h, l, eo, eh, el, trade_close, execution_price)
+        if self.pos != want:
+            self.last_entry_reason = "SKIP_OPPOSITE_SIDE_OPEN"
+            return "NONE"
+        fill_px = float(execution_price) if execution_price is not None else self._cross_fill(want, eo, eh, el)
+        return self._open_ticket(fill_px, want, False, lot, h if want > 0 else l, trade_close)
+
+    # ---- stops -------------------------------------------------------------
+
+    def _scan_stops(self, eh: float, el: float, only: list[Position] | None = None):
+        """Close every ticket whose stop the bar's raw range touched."""
+        sl_exits, closed_primary, closed_supps = 0, None, []
+        if effective_disable_stop_loss() or not self.positions:
+            return sl_exits, closed_primary, closed_supps
+        check = None if only is None else {id(p) for p in only}
+        slip = effective_stop_slippage()
         survivors: list[Position] = []
         for p in self.positions:
-            if check_ids is not None and id(p) not in check_ids:
+            if check is not None and id(p) not in check:
                 survivors.append(p)
                 continue
-            hit = self.pos > 0 and el <= p.sl or (self.pos < 0 and eh >= p.sl)
+            hit = el <= p.sl if self.pos > 0 else eh >= p.sl
             if not hit:
                 survivors.append(p)
                 continue
-            slipped_stop = p.sl - STOP_SLIPPAGE_PTS if self.pos > 0 else p.sl + STOP_SLIPPAGE_PTS
-            # Fill at the slipped stop. Do not take a worse gap-through open:
-            # that is what turned a huge entry-bar trail into a fake loss.
-            stop_fill = slipped_stop
+            # Fill at the slipped stop, never at a worse gap-through open.
+            stop_fill = p.sl - slip if self.pos > 0 else p.sl + slip
             pnl = self._close_one(p, stop_fill)
             sl_exits += 1
-            rec = {'entry': p.entry, 'exit': stop_fill, 'lot': p.lot, 'pnl': round(pnl, 4), 'reason': 'primary_tsl' if p.is_primary else 'supp_tsl'}
+            rec = {"entry": p.entry, "exit": stop_fill, "lot": p.lot, "ticket": p.ticket,
+                   "pnl": round(pnl, 4), "reason": "primary_tsl" if p.is_primary else "supp_tsl"}
             if p.is_primary:
-                primary_closed = True
                 closed_primary = rec
             else:
                 closed_supps.append(rec)
         self.positions = survivors
         if not self.positions:
             self.pos = 0
-        return (sl_exits, primary_closed, closed_primary, closed_supps)
+        return sl_exits, closed_primary, closed_supps
 
     @staticmethod
-    def _entry_execution_price(want: int, execution_prices: dict | None, fallback: float) -> float:
-        if not execution_prices:
-            return fallback
-        key = 'BUY' if want > 0 else 'SELL'
-        value = execution_prices.get(key)
-        return fallback if value is None else float(value)
+    def _entry_execution_price(want: int, execution_prices: dict | None) -> float | None:
+        """Live ask/bid at the moment the closed bar is processed, or None.
 
-    def push(self, o: float, h: float, l: float, c: float, xtrend: float, hist_in: float | None, histcolor: str | None=None, skip_worst_hours: bool | None=None, focus_best_hours: bool | None=None, time_str: str | None=None, raw_open: float | None=None, raw_high: float | None=None, raw_low: float | None=None, raw_close: float | None=None, execution_prices: dict | None=None):
+        None makes the open helpers fill at the previous-body break level (or
+        the raw open on a gap) - the backtest convention the desk tester and
+        the walk-forward reports use. The old fallback returned the raw open,
+        so lab/backtest fills silently differed from every other backtest.
+        """
+        if not execution_prices:
+            return None
+        value = execution_prices.get("BUY" if want > 0 else "SELL")
+        return None if value is None else float(value)
+
+    # ---- one closed bar ----------------------------------------------------
+
+    def push(self, o: float, h: float, l: float, c: float, xtrend: float, hist_in: float | None,
+             histcolor: str | None = None, skip_worst_hours: bool | None = None,
+             focus_best_hours: bool | None = None, time_str: str | None = None,
+             raw_open: float | None = None, raw_high: float | None = None,
+             raw_low: float | None = None, raw_close: float | None = None,
+             execution_prices: dict | None = None) -> dict:
         raw_values = (raw_open, raw_high, raw_low, raw_close)
-        if any((v is not None for v in raw_values)) and (not all((v is not None for v in raw_values))):
-            raise ValueError('raw_open, raw_high, raw_low and raw_close must be sent together')
-        bar_key = str(time_str or '').strip()
+        if any(v is not None for v in raw_values) and not all(v is not None for v in raw_values):
+            raise ValueError("raw_open, raw_high, raw_low and raw_close must be sent together")
+
+        # A retried bar replays its cached result; state never advances twice.
+        bar_key = str(time_str or "").strip()
         if bar_key and bar_key in self._seen_bars:
             duplicate = copy.deepcopy(self._seen_bars[bar_key])
-            duplicate['duplicate_bar'] = True
-            duplicate['dedupe_key'] = bar_key
+            duplicate["duplicate_bar"] = True
+            duplicate["dedupe_key"] = bar_key
             return duplicate
+
+        hist = 0.0 if hist_in is None else float(hist_in)
         if effective_skip_weekends() and is_weekend_bar(time_str):
             self.weekend_skips += 1
             self.warmed = True
-            skip = {'action': 'NONE', 'why': explain_decision('SKIP_WEEKEND_MARKET_CLOSED', action='NONE', zone='amber', hist=(0.0 if hist_in is None else float(hist_in)), seen_amber=self.seen_amber, n_total=self._n_total(), xt_gate=XT_GATE, trail=effective_trail_every_candle(), tsl=effective_tsl_pts()), 'decision_reason': 'SKIP_WEEKEND_MARKET_CLOSED', 'hist': 0.0 if hist_in is None else float(hist_in), 'histcolor': histcolor or 'amber', 'zone': 0, 'ha_side': ha_side(o, c), 'position': {0: 'FLAT', 1: 'LONG', -1: 'SHORT'}[self.pos], 'n_units': self._n_primary(), 'n_supp': self._n_supp(), 'n_total': self._n_total(), 'sl': None if not self.positions else next((p.sl for p in self.positions if p.is_primary), self.positions[0].sl), 'filled_action': None, 'weekend_skip': True, 'skip_weekends': True, 'entry_logic': 'prev_body_cross_xt', 'fill_mode': 'prev_body_immediate', 'mode': 'demo_trading_hist_rules_prev_body_025pt', 'weekend_skips': self.weekend_skips}
-            if bar_key:
-                self._seen_bars[bar_key] = copy.deepcopy(skip)
-                while len(self._seen_bars) > MAX_SEEN_BARS:
-                    self._seen_bars.popitem(last=False)
-            return skip
-        has_raw_execution = all((v is not None for v in raw_values))
-        self.last_execution_source = 'raw_ohlc' if has_raw_execution else 'signal_ohlc_fallback'
-        eo, eh, el, ec = (float(raw_open), float(raw_high), float(raw_low), float(raw_close)) if has_raw_execution else (o, h, l, c)
-        trade_close = ec if has_raw_execution else c
-        hist = 0.0 if hist_in is None else float(hist_in)
+            return self._remember(bar_key, {
+                "action": "NONE", "decision_reason": "SKIP_WEEKEND_MARKET_CLOSED",
+                "why": explain_decision("SKIP_WEEKEND_MARKET_CLOSED", hist=hist, zone="amber",
+                                        seen_amber=self.seen_amber, n_total=self._n_total()),
+                "hist": hist, "histcolor": histcolor or "amber", "zone": 0, "ha_side": ha_side(o, c),
+                "position": {0: "FLAT", 1: "LONG", -1: "SHORT"}[self.pos],
+                "n_units": self._n_primary(), "n_supp": self._n_supp(), "n_total": self._n_total(),
+                "sl": self._active_sl(), "filled_action": None, "weekend_skip": True,
+                "skip_weekends": True, "weekend_skips": self.weekend_skips,
+                "mode": self._mode_label(), "duplicate_bar": False,
+            })
+
+        has_raw = all(v is not None for v in raw_values)
+        self.last_execution_source = "raw_ohlc" if has_raw else "signal_ohlc_fallback"
+        eo, eh, el, ec = (float(raw_open), float(raw_high), float(raw_low), float(raw_close)) if has_raw else (o, h, l, c)
+        trade_close = ec
+        self._update_atr(eh, el, ec)
         zz, color = zone_from_sent(hist, histcolor)
         self.hist = hist
         self.warmed = True
@@ -749,177 +778,191 @@ class LatestModsEngine:
         if focus_best_hours is not None:
             self.focus_best_hours = bool(focus_best_hours)
         hour = _parse_hour_utc4(time_str)
-        lot = lot_for_hour(hour, self.focus_best_hours, DEFAULT_VOLUME)
-        action = 'NONE'
+        lot = lot_for_hour(hour, self.focus_best_hours, effective_volume())
+        every = effective_every_candle()
+
+        action = "NONE"
         self.last_entry_reason = None
         closed_supps: list[dict] = []
         closed_primary: dict | None = None
-        primary_closed = False
         sl_exits = 0
         filled_action = None
         just_opened: list[Position] = []
+        stopout = False
         sl_before = self._active_sl()
+
         if zz == 0:
             self.seen_amber = True
-            self.pending = None
-        if self.pending is not None:
-            pa = self._do_open(
-                self._entry_execution_price(self.pending.want, execution_prices, eo),
-                self.pending.want,
-                self.pending.is_primary,
-                self.pending.lot,
-                self.pending.signal_break_level,
-                trade_close,
-            )
-            if pa in ('BUY', 'SELL', 'BUY_ADD', 'SELL_ADD'):
-                action = pa
-                filled_action = pa
-                just_opened.append(self.positions[-1])
-            self.pending = None
-        if self._n_total() > 0:
-            prior = [p for p in self.positions if all((p is not q for q in just_opened))]
-            se, pc, cpri, csup = self._scan_stops(eh, el, eo, has_raw_execution, only=prior) if prior else (0, False, None, [])
+
+        # 1. Stops on tickets that were open before this bar, then amber flatten
+        #    or trail everything that survived.
+        if self.positions:
+            se, cpri, csup = self._scan_stops(eh, el)
             sl_exits += se
-            if pc:
-                primary_closed = True
-                closed_primary = cpri
+            closed_primary = cpri or closed_primary
             closed_supps.extend(csup)
             if not self.positions:
-                if sl_exits and filled_action is None:
-                    action = 'EXIT'
-                elif action == 'NONE':
-                    action = 'HOLD'
-            if self._n_total() > 0:
-                if zz == 0:
-                    action = self._flatten(ec)
-                    self.run_side = 0
-                    self.seen_amber = True
-                else:
-                    if effective_trail_every_candle():
-                        # Trail off the bar's extreme, not its close: a bar that
-                        # spikes and gives most of it back has still earned the
-                        # tighter stop.
-                        for p in self.positions:
-                            self._advance_best(p, ec, self.pos)
-                    # One entry per bar: skip SUPP if this bar already filled (e.g. deferred primary).
-                    if (not just_opened
-                            and zz == (1 if self.pos > 0 else -1)
-                            and self._entry_ok(o, eh, el, ec, xtrend, self.pos, self.break_level, trade_close=trade_close)):
-                        if not hour_allowed(hour, self.skip_worst_hours):
-                            self.hour_skips += 1
-                            self.last_entry_reason = f'SKIP_WORST_HOUR_{hour}'
-                        else:
-                            pa = self._open_on_cross(self.pos, False, lot, eh, el, eo, trade_close, self._entry_execution_price(self.pos, execution_prices, eo))
-                            if pa in ('BUY_ADD', 'SELL_ADD'):
-                                action = pa
-                                filled_action = pa
-                                just_opened.append(self.positions[-1])
-                    if self._n_total() > 0 and self._mlevel(ec) < STOPOUT:
-                        action = self._flatten(ec)
-                        self.run_side = 0
-        if (not just_opened
-                and self._n_total() == 0 and self.run_side != 0
-                and (zz == (1 if self.run_side > 0 else -1))
-                and self._entry_ok(o, eh, el, ec, xtrend, self.run_side, self.break_level, trade_close=trade_close)):
+                action = "EXIT" if sl_exits else "HOLD"
+            elif zz == 0:
+                action = self._flatten(ec)
+                self.run_side = 0
+            else:
+                if effective_trail_every_candle():
+                    for p in self.positions:
+                        self._advance_best(p, ec, self.pos)
+                # Classic mode: at most one new ticket per bar - a SUPP on the
+                # raw wick break of the last trade candle.
+                if (not every and zz == self.pos
+                        and self._entry_ok(eh, el, xtrend, self.pos, self.break_level, False)):
+                    if not hour_allowed(hour, self.skip_worst_hours):
+                        self.hour_skips += 1
+                        self.last_entry_reason = f"SKIP_WORST_HOUR_{hour}"
+                    else:
+                        pa = self._open_supp(self.pos, lot, eh, el, eo, trade_close,
+                                             self._entry_execution_price(self.pos, execution_prices))
+                        if pa in ("BUY_ADD", "SELL_ADD"):
+                            action = filled_action = pa
+                            just_opened.append(self.positions[-1])
+
+        # 2. Classic mode: flat but the run is still alive - re-enter as SUPP.
+        if (not every and not just_opened and not self.positions and self.run_side != 0
+                and zz == self.run_side
+                and self._entry_ok(eh, el, xtrend, self.run_side, self.break_level, False)):
             if not hour_allowed(hour, self.skip_worst_hours):
                 self.hour_skips += 1
-                self.last_entry_reason = f'SKIP_WORST_HOUR_{hour}'
+                self.last_entry_reason = f"SKIP_WORST_HOUR_{hour}"
             else:
-                pa = self._open_on_cross(self.run_side, False, lot, eh, el, eo, trade_close, self._entry_execution_price(self.run_side, execution_prices, eo))
-                if pa in ('BUY_ADD', 'SELL_ADD'):
-                    action = pa
-                    filled_action = pa
+                pa = self._open_supp(self.run_side, lot, eh, el, eo, trade_close,
+                                     self._entry_execution_price(self.run_side, execution_prices))
+                if pa in ("BUY_ADD", "SELL_ADD"):
+                    action = filled_action = pa
                     just_opened.append(self.positions[-1])
+
+        # 3. Amber ends the run whatever mode we are in.
         if zz == 0:
-            # Orange/amber: flatten everything and reset run + trailing levels.
             self.run_side = 0
             self.break_level = None
             self.last_trade_close = None
             self.pos = 0
-            self.pending = None
-        if (not just_opened
-                and self._n_total() == 0 and self.run_side == 0 and self.seen_amber
-                and (self.pending is None) and (self.prev_high is not None)):
-            want = 0
-            if zz == 1 and self._entry_ok(o, h, l, c, xtrend, 1, self.prev_high, is_primary=True, trade_close=trade_close):
-                want = 1
-            elif zz == -1 and self._entry_ok(o, h, l, c, xtrend, -1, self.prev_low or l, is_primary=True, trade_close=trade_close):
-                want = -1
-            if want:
+
+        # 4. Primary gate. Every-candle mode stacks; classic needs amber arming.
+        if zz != 0 and not just_opened and self.prev_high is not None:
+            want = zz
+            can_try = (self._n_total() == 0 or self.pos == zz) if every else (
+                self._n_total() == 0 and self.run_side == 0 and self.seen_amber)
+            if can_try and self._entry_ok(h, l, xtrend, want, None, True):
                 if not hour_allowed(hour, self.skip_worst_hours):
                     self.hour_skips += 1
-                    self.last_entry_reason = f'SKIP_WORST_HOUR_{hour}'
+                    self.last_entry_reason = f"SKIP_WORST_HOUR_{hour}"
                 else:
-                    pa = self._open_on_cross(want, True, lot, eh, el, eo, trade_close, self._entry_execution_price(want, execution_prices, eo))
-                    if pa in ('BUY', 'SELL'):
-                        action = pa
-                        filled_action = pa
+                    px = self._entry_execution_price(want, execution_prices)
+                    pa = (self._open_stack if every else self._open_primary)(
+                        want, lot, h, l, eo, eh, el, trade_close, px)
+                    if pa in ("BUY", "SELL", "BUY_ADD", "SELL_ADD"):
+                        action = filled_action = pa
                         just_opened.append(self.positions[-1])
-        if just_opened and self._n_total() > 0:
-            live_new = [p for p in just_opened if any((p is q for q in self.positions))]
-            if effective_entry_bar_mode() == 'test' and live_new:
-                se, pc, cpri, csup = self._scan_stops(eh, el, eo, has_raw_execution, only=live_new)
+            elif every and self._n_total() and self.pos != zz:
+                self.last_entry_reason = "SKIP_OPPOSITE_SIDE_OPEN"
+
+        # 5. Entry-bar handling: optional stop test, then trail to this close.
+        if just_opened and self.positions:
+            live_new = [p for p in just_opened if p in self.positions]
+            if effective_entry_bar_mode() == "test" and live_new:
+                se, cpri, csup = self._scan_stops(eh, el, only=live_new)
                 if se:
                     sl_exits += se
-                    if pc:
-                        primary_closed = True
-                        closed_primary = cpri
+                    closed_primary = cpri or closed_primary
                     closed_supps.extend(csup)
-                    live_new = [p for p in live_new if any((p is q for q in self.positions))]
-                    if not self.positions and action in ('BUY', 'SELL', 'BUY_ADD', 'SELL_ADD'):
-                        action = 'EXIT'
-            # Trail new tickets to THIS close in every entry-bar mode, including
-            # 'defer'. Deferring must only skip the stop TEST on the entry bar —
-            # skipping the trail too left the stop at entry±TSL, so the next bar
-            # stopped the trade out for -(TSL+slippage)-spread even mid-trend.
-            # _trail_sl only ever tightens toward profit, so this cannot widen risk.
+                    live_new = [p for p in live_new if p in self.positions]
+                    if not self.positions and action in ("BUY", "SELL", "BUY_ADD", "SELL_ADD"):
+                        action = "EXIT"
             if effective_trail_every_candle() and effective_trail_entry_bar():
                 for p in live_new:
                     self._advance_best(p, ec, self.pos)
-        if self._n_total() > 0 and self._mlevel(ec) < STOPOUT:
+
+        # 6. Margin stop-out.
+        if self.positions and self._mlevel(ec) < STOPOUT:
             action = self._flatten(ec)
             self.run_side = 0
-        if action == 'NONE':
-            action = 'HOLD' if self.pos else 'NONE'
-        self.prev_high = h
-        self.prev_low = l
-        self.prev_open = o
-        self.prev_close = c
+            stopout = True
+
+        if action == "NONE":
+            action = "HOLD" if self.pos else "NONE"
+
+        self.prev_high, self.prev_low, self.prev_open, self.prev_close = h, l, o, c
+
         active_sl = self._active_sl()
-        fill_px = just_opened[-1].entry if just_opened else eo
         if sl_exits:
-            decision_reason = f'STOP_EXIT_{sl_exits}'
-        elif action == 'EXIT' and zz == 0:
-            decision_reason = 'ORANGE_HISTOGRAM_EXIT'
+            decision_reason = f"STOP_EXIT_{sl_exits}"
+        elif stopout:
+            decision_reason = "MARGIN_STOPOUT"
+        elif action == "EXIT" and zz == 0:
+            decision_reason = "ORANGE_HISTOGRAM_EXIT"
         elif filled_action:
-            decision_reason = f'ENTRY_FILLED_{filled_action}'
+            decision_reason = f"ENTRY_FILLED_{filled_action}"
         elif self.last_entry_reason:
             decision_reason = self.last_entry_reason
-        elif not self.seen_amber and self.run_side == 0:
-            decision_reason = 'WAITING_FOR_AMBER_ARM'
         elif zz == 0:
-            decision_reason = 'AMBER_ARM_OR_FLAT'
-        elif self._n_total() > 0:
-            decision_reason = 'HOLDING_MANAGE_TRAIL'
-        elif zz == 1 and not self.seen_amber:
-            decision_reason = 'WAITING_FOR_AMBER_ARM'
-        elif zz == -1 and not self.seen_amber:
-            decision_reason = 'WAITING_FOR_AMBER_ARM'
+            decision_reason = "AMBER_ARM_OR_FLAT"
+        elif self.positions:
+            decision_reason = "HOLDING_MANAGE_TRAIL"
+        elif not every and not self.seen_amber and self.run_side == 0:
+            decision_reason = "WAITING_FOR_AMBER_ARM"
         else:
-            decision_reason = 'NO_ENTRY_SIGNAL'
-        why_text = explain_decision(
-            decision_reason,
-            action=action,
-            zone=color,
-            hist=hist,
-            seen_amber=self.seen_amber,
-            n_total=self._n_total(),
-            xtrend=xtrend,
-            xt_gate=XT_GATE,
-            trail=effective_trail_every_candle(),
-            tsl=effective_tsl_pts(),
-        )
-        result = {'action': action, 'why': why_text, 'decision_reason': decision_reason, 'hist': hist, 'histcolor': color, 'zone': zz, 'ha_side': ha_side(o, c), 'position': {0: 'FLAT', 1: 'LONG', -1: 'SHORT'}[self.pos], 'n_units': self._n_primary(), 'n_supp': self._n_supp(), 'n_total': self._n_total(), 'sl': active_sl, 'pending_next_open': self.pending is not None, 'run_side': self.run_side, 'seen_amber': self.seen_amber, 'break_level': self.break_level, 'last_trade_close': self.last_trade_close, 'supp_close_rule': 'buy: next candle high > last trade candle high; sell: next candle low < last trade candle low', 'supp_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'best_price': round(p.best_price, 4), 'tsl_mode': 'ticks_live'} for p in self.positions if not p.is_primary], 'closed_supps': closed_supps, 'closed_primary': closed_primary, 'primary_closed': primary_closed, 'sl_exits': sl_exits, 'filled_action': filled_action, 'fill_price': None if not just_opened else just_opened[-1].entry, 'sl_updated': active_sl, 'sl_changed': bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-09)), 'open_positions': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions], 'skip_worst_hours': self.skip_worst_hours, 'focus_best_hours': self.focus_best_hours, 'best_lot_mult': BEST_LOT_MULT, 'fill_lot': getattr(self, '_last_fill_lot', DEFAULT_VOLUME), 'hour_utc4': hour, 'hour_skips': self.hour_skips, 'xt_skips': self.xt_skips, 'weekend_skips': self.weekend_skips, 'skip_weekends': SKIP_WEEKENDS, 'entry_logic': 'primary_body_xt__supp_trade_wick', 'fill_mode': 'live_quote' if execution_prices else ('prev_body_immediate' if not just_opened or just_opened[-1].is_primary else 'trade_wick_immediate'), 'close_confirm': False, 'tsl_pts': effective_tsl_pts(), 'tsl_desired': _env_float('TSL_PTS', 0.25), 'tsl_ticks': effective_tsl_ticks(), 'tsl_tick_size': effective_tick_size(), 'tsl_distance': round(tsl_distance(), 4), 'tsl_pct_equiv': round(tsl_distance() / ec * 100.0, 5) if ec else None, 'tsl_mode': 'ticks', 'broker_min_stop_pts': _env_float('BROKER_MIN_STOP_PTS', 0.30), 'mode': 'latest_mods_primary_xt_supp_wick_025pt', 'xtrend': xtrend, 'xtrend_gate': XT_GATE, 'xtrend_gate_supp': effective_supp_xt_gate(), 'xtrend_touch_buf': XT_BUF, 'primary_wick_gate': PRIMARY_WICK_GATE, 'stop_slippage_pts': STOP_SLIPPAGE_PTS, 'stop_active_on_entry_bar': effective_entry_bar_mode() == 'test', 'entry_bar_mode': effective_entry_bar_mode(), 'trail_every_candle': effective_trail_every_candle(), 'trail_entry_bar': effective_trail_entry_bar(), 'execution_price_source': 'live_quote' if execution_prices else ('raw_ohlc' if has_raw_execution else 'signal_ohlc_fallback'), 'open': o, 'high': h, 'low': l, 'close': c, 'raw_open': eo, 'raw_high': eh, 'raw_low': el, 'raw_close': ec, 'spread_cost': SPREAD_COST, 'balance': round(self.balance, 4), 'duplicate_bar': False, 'dedupe_active': bool(bar_key), 'closed_units': ([{'kind': 'primary', **closed_primary}] if closed_primary else []) + [{'kind': 'supp', **x} for x in closed_supps], 'fill_sl': None if filled_action is None else self._init_sl(fill_px, 1 if 'BUY' in filled_action else -1), 'position_stops': [{'entry': p.entry, 'sl': round(p.sl, 4), 'lot': p.lot, 'is_primary': p.is_primary} for p in self.positions]}
+            decision_reason = "NO_ENTRY_SIGNAL"
+        why_text = explain_decision(decision_reason, action=action, zone=color, hist=hist,
+                                    seen_amber=self.seen_amber, n_total=self._n_total(), xtrend=xtrend)
+        closed_units = ([{"kind": "primary", **closed_primary}] if closed_primary else []) + \
+                       [{"kind": "supp", **x} for x in closed_supps]
+        result = {
+            "action": action, "why": why_text, "decision_reason": decision_reason,
+            "hist": hist, "histcolor": color, "zone": zz, "ha_side": ha_side(o, c),
+            "position": {0: "FLAT", 1: "LONG", -1: "SHORT"}[self.pos],
+            "n_units": self._n_primary(), "n_supp": self._n_supp(), "n_total": self._n_total(),
+            "sl": active_sl, "sl_updated": active_sl,
+            "sl_changed": bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-9)),
+            "run_side": self.run_side, "seen_amber": self.seen_amber,
+            "break_level": self.break_level, "last_trade_close": self.last_trade_close,
+            "filled_action": filled_action,
+            "fill_price": just_opened[-1].entry if just_opened else None,
+            # The new ticket's own stop (ATR-sized, already trailed to this close):
+            # this is what the bridge sends with the market order.
+            "fill_sl": just_opened[-1].sl if just_opened and just_opened[-1] in self.positions else None,
+            "fill_lot": self._last_fill_lot,
+            "open_positions": [{"entry": p.entry, "sl": round(p.sl, 4), "lot": p.lot,
+                                "is_primary": p.is_primary, "ticket": p.ticket,
+                                "tsl": round(p.tsl or tsl_distance(), 4)} for p in self.positions],
+            "closed_primary": closed_primary, "closed_supps": closed_supps,
+            "closed_units": closed_units, "sl_exits": sl_exits,
+            "skip_worst_hours": self.skip_worst_hours, "focus_best_hours": self.focus_best_hours,
+            "hour_utc4": hour, "hour_skips": self.hour_skips, "xt_skips": self.xt_skips,
+            "weekend_skips": self.weekend_skips, "skip_weekends": effective_skip_weekends(),
+            "mode": self._mode_label(),
+            "entry_every_candle": every, "hist_thresh": effective_hist_thresh(),
+            "tsl_mode": "atr" if effective_tsl_atr_mult() > 0 else "ticks",
+            "tsl_atr_mult": effective_tsl_atr_mult(), "atr": round(float(self._atr), 4),
+            "tsl_ticks": effective_tsl_ticks(), "tsl_tick_size": effective_tick_size(),
+            "tsl_distance": round(self._trade_tsl(), 4),
+            "xtrend": xtrend, "xtrend_gate": effective_xt_gate(),
+            "xtrend_gate_supp": effective_xt_gate_supp(), "xtrend_touch_buf": effective_xt_buf(),
+            "stop_slippage_pts": effective_stop_slippage(),
+            "entry_bar_mode": effective_entry_bar_mode(),
+            "trail_every_candle": effective_trail_every_candle(),
+            "trail_entry_bar": effective_trail_entry_bar(),
+            "execution_price_source": "live_quote" if execution_prices else self.last_execution_source,
+            "open": o, "high": h, "low": l, "close": c,
+            "raw_open": eo, "raw_high": eh, "raw_low": el, "raw_close": ec,
+            "spread_cost": effective_spread_cost(), "balance": round(self.balance, 4),
+            "duplicate_bar": False, "dedupe_active": bool(bar_key),
+        }
+        return self._remember(bar_key, result)
+
+    def _mode_label(self) -> str:
+        entry = "every_candle" if effective_every_candle() else "classic_amber_supp"
+        stop = f"atr{effective_tsl_atr_mult():g}" if effective_tsl_atr_mult() > 0 else f"ticks{effective_tsl_ticks():g}"
+        return f"{entry}__{stop}"
+
+    def _remember(self, bar_key: str, result: dict) -> dict:
         if bar_key:
             self._seen_bars[bar_key] = copy.deepcopy(result)
             self._seen_bars.move_to_end(bar_key)
@@ -928,19 +971,15 @@ class LatestModsEngine:
         return result
 
 
-
 class Mt5LiveEngine:
-    """Adapt the exact Demo engine to raw MT5 bars plus HA signal inputs."""
+    """Adapts the bridge's MT5 bar dicts (signal_* / raw_*) to LatestModsEngine."""
 
     def __init__(self):
         self.engine = LatestModsEngine()
         self.last_closed_time = None
 
     def snapshot(self) -> dict:
-        return {
-            "engine": self.engine.snapshot(),
-            "last_closed_time": self.last_closed_time,
-        }
+        return {"engine": self.engine.snapshot(), "last_closed_time": self.last_closed_time}
 
     def restore(self, data: dict) -> None:
         self.engine.restore(data.get("engine") or {})
@@ -948,13 +987,9 @@ class Mt5LiveEngine:
 
     def push(self, bar: dict, execution_prices: dict | None = None) -> dict:
         result = self.engine.push(
-            float(bar["signal_open"]),
-            float(bar["signal_high"]),
-            float(bar["signal_low"]),
-            float(bar["signal_close"]),
-            float(bar["xtrend"]),
-            float(bar["hist"]),
-            bar.get("histcolor"),
+            float(bar["signal_open"]), float(bar["signal_high"]),
+            float(bar["signal_low"]), float(bar["signal_close"]),
+            float(bar["xtrend"]), float(bar["hist"]), bar.get("histcolor"),
             time_str=bar.get("time"),
             raw_open=float(bar.get("raw_open", bar["open"])),
             raw_high=float(bar.get("raw_high", bar["high"])),
@@ -966,18 +1001,12 @@ class Mt5LiveEngine:
         return result
 
     def warmup(self, bars: list[dict], balance: float | None = None) -> None:
-        """Replay history for indicator/run context without placing orders."""
+        """Replay history for indicator/run context without keeping any trades."""
         self.engine.reset()
         for bar in bars:
             self.push(bar)
-        self.engine.pos = 0
-        self.engine.positions = []
-        self.engine.break_level = None
-        self.engine.run_side = 0
-        self.engine.pending = None
-        self.engine.balance = float(balance if balance is not None else START_BALANCE)
-        self.engine.hour_skips = 0
-        self.engine.xt_skips = 0
-        self.engine.weekend_skips = 0
-        self.engine._seen_bars.clear()
-
+        e = self.engine
+        e.pos, e.positions, e.break_level, e.last_trade_close, e.run_side = 0, [], None, None, 0
+        e.balance = float(balance if balance is not None else START_BALANCE)
+        e.hour_skips = e.xt_skips = e.weekend_skips = 0
+        e._seen_bars.clear()

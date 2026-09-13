@@ -1,4 +1,5 @@
-"""Asim live desk on Google Compute Engine — API + frontend."""
+"""Live desk on Google Compute Engine: FastAPI app serving /live, / (lab + backtest UI)
+and the /api/broker/* endpoints the Ali PC bridge talks to."""
 
 from __future__ import annotations
 
@@ -35,44 +36,6 @@ PUBLIC_PREFIXES = (
     "/static/",
 )
 
-BACKTEST_REFERENCE = {
-    "profile": "asim_aws_histogram_filters_off",
-    "engine_source": "lambda_asim_fb_agent/server.py",
-    "dataset_simple_gold": "VANTAGE_XAUUSD_15_with_histcolor.csv",
-    "dataset_goldm": "XAUUSDm_M15_202601012300_202608271930.csv",
-    "policy": {
-        "entry": "prev_body_cross_xt",
-        "fill": "prev_body_immediate",
-        "stop_active_on_entry_bar": False,
-        "trail_every_candle": True,
-        "tsl_points": 0.25,
-        "stop_slippage_points": 0.25,
-        "spread_cost_per_fill": 0.06,
-        "skip_worst_hours": False,
-        "focus_best_hours": False,
-        "xtrend_gate": True,
-        "xtrend_buffer": 0.0,
-        "exit_orange_histogram": True,
-    },
-    "results_500_simple_gold_filters_off": {
-        "start_balance": 500.0,
-        "final_equity": 45746.59,
-        "net_profit": 45246.59,
-        "closed_trades": 7323,
-        "wins": 5540,
-        "losses": 1783,
-        "win_rate_pct": 75.65,
-        "primary_entries": 1331,
-        "supplementary_entries": 5993,
-    },
-    "results_500_simple_gold_filters_on": {
-        "start_balance": 500.0,
-        "final_equity": 57265.40,
-        "net_profit": 56765.40,
-        "closed_trades": 6085,
-        "win_rate_pct": 76.20,
-    },
-}
 
 app.add_middleware(
     CORSMiddleware,
@@ -161,16 +124,7 @@ def _broker_handle(method: str, path: str, body: dict | None = None):
     )
     if out is None:
         return _json_response(404, {"error": "not found", "path": path})
-    # broker_live.response is _lambda_response → already a Starlette response
-    if isinstance(out, (JSONResponse, HTMLResponse)):
-        return out
-    if out.get("headers", {}).get("Content-Type", "").startswith("text/html"):
-        return HTMLResponse(content=out["body"], status_code=out["statusCode"])
-    try:
-        payload = json.loads(out["body"])
-    except (TypeError, json.JSONDecodeError):
-        payload = {"raw": out.get("body")}
-    return _json_response(out["statusCode"], payload)
+    return out   # broker_live builds the response through _lambda_response
 
 
 @app.get("/login")
@@ -264,17 +218,11 @@ def api_info():
         "backtest_path": "/",
         "engine_health": "/health",
         "broker_state": "/api/broker/state",
-        "backtest_reference": BACKTEST_REFERENCE,
         "lab": True,
         "min_warmup_bars": 50,
         "default_warmup_bars": 100,
         "upstream": "local",
     }
-
-
-@app.get("/api/backtest-reference")
-def backtest_reference():
-    return {"ok": True, **BACKTEST_REFERENCE}
 
 
 @app.get("/api/broker/state")

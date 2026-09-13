@@ -9,10 +9,12 @@
       so a CSV can be tested without hitting AWS. If btRun and server.py
       ever disagree, server.py is the live bot.
 
-  Trading rules (must match server.py):
-    amber first, HA colour does not gate, previous-body cross,
-    fill at that body (or this open on a far-side gap),
-    trail every candle close, stop live from the next bar, 0.25-point TSL, amber flattens all.
+  Trading rules (must match mt5_live_engine.py):
+    live mode = the primary gate (previous-body break + candle clear of
+    X-Trend) on every green/red candle, tickets stack in the run direction,
+    stop = 1.25 x ATR(14) trailing each close, amber flattens all.
+    classic mode = amber arms, one primary per colour run, SUPP on the raw
+    wick of the last trade candle, fixed tick stop.
 
   __MODEL_NAME__ is replaced by Lambda with "Asim FB Agent".
 -->
@@ -567,13 +569,15 @@
         <div class="formula-box">Live: use the hist value and histcolor from the webhook.
 Do not recompute from close.
 
-green  : colour green, or hist ≥ +10 if colour is missing
-orange : colour orange, or −10 &lt; hist &lt; +10
-red    : colour red, or hist ≤ −10</div>
+green  : colour green, or hist ≥ +TH if colour is missing
+orange : colour orange, or −TH &lt; hist &lt; +TH
+red    : colour red, or hist ≤ −TH
+TH = HIST_THRESH (Ali live: 15)</div>
 
         <h3>2. Entries and adds</h3>
         <ul>
-          <li>Amber must appear first. Then <strong>one primary</strong> per colour run; after that only SUPP until the next amber. <strong>At most one new entry (primary or SUPP) per bar</strong> — multiple EXIT labels on one bar mean older lots closed, not multiple opens.</li>
+          <li><strong>Live mode (ENTRY_EVERY_CANDLE=1, Ali desk):</strong> the primary gate — this candle breaks the previous <strong>body</strong> and sits fully clear of X-Trend — is checked on <strong>every</strong> green/red candle. Each pass opens its own ticket, stacking in the run direction up to MAXPOS. No amber arming, no supplementary wick logic (MAX_SUPP=0). An opposite-colour candle while tickets are open does nothing until amber flattens.</li>
+          <li><strong>Classic mode (ENTRY_EVERY_CANDLE=0):</strong> amber must appear first. Then <strong>one primary</strong> per colour run; after that only SUPP until the next amber. At most one new entry per bar.</li>
           <li><strong>Green</strong> — on the next candle, buy when it crosses the previous candle's <strong>body</strong> (max of previous open/close). Example: previous open 4000, close 4003, wick 4005 — crossing <strong>4003</strong> is the buy. The 4005 wick is ignored.</li>
           <li><strong>Red</strong> — sell when the next candle crosses the previous body low.</li>
           <li>Primary: previous-<strong>body</strong> cross + <strong>X-Trend clear</strong>. SUPP: only break the <strong>raw wick of the last trade candle</strong> (XT check optional, off by default). Fill SUPP at that raw wick. The Trading view paints raw MT5 candles by default so the arrow P/L matches the bar you see — Heikin Ashi bodies are signal-only and can look much taller than the real move.</li>
@@ -581,7 +585,7 @@ red    : colour red, or hist ≤ −10</div>
           <li><strong>Amber</strong> is the only colour event that flattens and resets the run.</li>
           <li>HA candle colour never blocks an entry and never forces an exit. A red HA bar inside a green-hist run is held.</li>
           <li>The arrow is drawn on the candle that made the cross. Fill is the previous body (4003), or this open on a far-side gap. The wick (4005) is never the fill.</li>
-          <li>Lot <strong>0.01</strong> (2× in best hours), leverage <strong>1:100</strong>. Worst hours are skipped. Add blocked under about <strong>75%</strong> margin.</li>
+          <li>Lot <strong>VOLUME</strong> (Ali live 0.02), leverage <strong>1:100</strong>. Hour filters are OFF on the Ali desk. Add blocked under about <strong>75%</strong> margin.</li>
         </ul>
 
         <h3>3. X-Trend gate (ON, buffer 0.00)</h3>
@@ -593,7 +597,7 @@ Otherwise no entry — the bar is counted in "XT skips"</div>
 
         <h3>4. Stop</h3>
         <ul>
-          <li>Each candle has its own stop: after that candle closes, buy SL = max(old, close − TSL), sell SL = min(old, close + TSL). TSL = <strong>1111 ticks × 0.001</strong> (= $1.111 on XAUUSDm), matching live. Start at −TSL from fill; if price goes up the stop steps up with it.</li>
+          <li>Each ticket has its own stop: after every closed candle, buy SL = max(old, close − TSL), sell SL = min(old, close + TSL). TSL = <strong>TSL_ATR_MULT × Wilder ATR(14)</strong> of the raw bars at entry (Ali live: 1.25×, fixed for that ticket), or <strong>TSL_TICKS × tick size</strong> when the multiplier is 0. Start at −TSL from fill; the stop only ever moves in the trade's favour.</li>
           <li>The entry candle is <strong>not</strong> stopped against its own wick. That trail becomes live on the <strong>next</strong> candle.</li>
           <li>Opposite HA does not freeze the trail. Hit: buy if candle low ≤ stop; sell if candle high ≥ stop. No take-profit.</li>
         </ul>
@@ -842,8 +846,8 @@ Otherwise no entry — the bar is counted in "XT skips"</div>
           Upload signal OHLC + X-Trend, or raw MT5 OHLC. Raw Goldm files without
           X-Trend automatically receive HA signal candles and SuperTrend X-Trend (6/0.8).
           Histogram value and colour are computed here (Plot is ignored).
-          Rules: amber first · next candle crosses previous body · fill at that body · TSL 1111 ticks · amber stops the run.
-          The <b>X-Trend gate</b> and its <b>buffer</b> are both set in Testing.
+          Rules follow the live engine: entry mode (every candle / classic), histogram threshold, ATR or tick stop,
+          X-Trend gate and buffer are all set in Testing. Defaults = the Ali live configuration.
           A wick within the buffer of the line counts as touching, so no entry.
         </div>
         <div class="subnav" id="btNav">
@@ -858,9 +862,9 @@ Otherwise no entry — the bar is counted in "XT skips"</div>
           <h2>Histogram formula</h2>
           <div class="formula-box" id="btFormula">hist = EMA(WilderRSI(close, 3), 5) − 50
 
-Green  : hist ≥ +10     → buy / add when this candle crosses the previous body
-Orange : −10 &lt; hist &lt; +10 → no trade · flatten if in a position
-Red    : hist ≤ −10     → sell / add when this candle crosses the previous body low
+Green  : hist ≥ +TH     → buy when this candle breaks the previous body high (TH = Testing → hist threshold, live 15)
+Orange : −TH &lt; hist &lt; +TH → no trade · flatten if in a position
+Red    : hist ≤ −TH     → sell when this candle breaks the previous body low
 
 X-Trend source (Testing / Process):
   SuperTrend HA 6/0.8  OR  KJ GagaTrend on HA  OR  CSV column
@@ -870,9 +874,9 @@ X-Trend gate (optional in Testing — live labs stay ON):
   Sell : high &lt; X-Trend − buffer
   Wick on the line → skip. Default buffer 0.00, editable in Testing.
 
-Stop   : 1111 ticks × tick size (default 0.001 → $1.111), recalculated every 15m on the bar close,
-         ratchet only in the trade’s favour (buy SL = close − TSL · sell SL = close + TSL). No take-profit.
-Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fall under ~75%</div>
+Stop   : TSL_ATR_MULT × ATR(14) at entry (live 1.25×) or TSL_TICKS × tick size when the multiplier is 0,
+         ratchet only in the trade’s favour on each bar close (buy SL = close − TSL · sell SL = close + TSL). No take-profit.
+Lot    : VOLUME (live 0.02)   ·   Leverage : 1:100   ·   Block add if margin level would fall under ~75%</div>
           <div class="row">
             <label>CSV file</label>
             <input id="btFile" type="file" accept=".csv,text/csv" style="min-width:260px" />
@@ -884,8 +888,8 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
           <div class="row">
             <label>X-Trend source</label>
             <select id="btXtSource" style="min-width:320px">
-              <option value="supertrend" selected>SuperTrend HA 6/0.8 (Hamza live)</option>
-              <option value="gaga">KJ GagaTrend on HA (Ali live)</option>
+              <option value="gaga" selected>KJ GagaTrend on HA (Ali live)</option>
+              <option value="supertrend">SuperTrend HA 6/0.8 (Hamza live)</option>
               <option value="file">CSV X-Trend column (if present)</option>
             </select>
             <span class="hint">Used when you click <b>Process histogram</b> or <b>Start backtest</b>. Does not change live trading.</span>
@@ -900,30 +904,46 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
       <div class="bt-sub" id="bt-testing">
         <div class="card">
           <h2>Testing</h2>
-          <div class="hint"><strong>Asim FB Agent:</strong> Histogram rules engine · amber first · next candle crosses previous <strong>body</strong> (not wick) · fill at that body (4003, not 4005), or this open on a far-side gap · <strong>X-Trend gate ON</strong> · trail every candle close · stop live from the next bar · <strong>skip-worst ON</strong> · <strong>2× best hours</strong> · TSL <strong>1111 ticks</strong> (× tick size 0.001 = $1.111, matches live) · amber stops the run.</div>
-          <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="500" /></div>
+          <div class="hint">Browser copy of <code>mt5_live_engine.py</code>. Defaults are the <strong>Ali live configuration</strong>: every-candle entries, hist threshold 15, stop 1.25 × ATR(14), lot 0.02, X-Trend gate ON, hour filters OFF. Change any field to A/B a variant — nothing here touches live trading.</div>
+          <div class="row">
+            <label>Entry mode</label>
+            <select id="btEntryMode" style="min-width:320px">
+              <option value="every" selected>Every candle — primary gate on each green/red bar, tickets stack (live)</option>
+              <option value="classic">Classic — amber arms, one primary per run, SUPP on last-trade wick</option>
+            </select>
+          </div>
+          <div class="row"><label>hist threshold</label><input id="btHistThresh" type="number" step="0.5" min="0" value="15" /><span class="hint">green ≥ +TH · red ≤ −TH · amber between (live 15)</span></div>
+          <div class="row">
+            <label>Entry fill</label>
+            <select id="btFillMode" style="min-width:320px">
+              <option value="body" selected>Previous body level (break price; walk-forward reports)</option>
+              <option value="close">Bar close — market price when the closed bar is processed (live-like)</option>
+            </select>
+            <span class="hint">Live fills at the ask/bid when the bar closes, not at the break level, so "bar close" is the pessimistic, live-like choice.</span>
+          </div>
+          <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="2000" /></div>
           <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="100" /></div>
-          <div class="row"><label>lot</label><input id="btLot" type="number" step="any" value="0.01" /></div>
+          <div class="row"><label>lot</label><input id="btLot" type="number" step="any" value="0.02" /></div>
           <div class="row"><label>spread (USD)</label><input id="btSpread" type="number" step="any" value="0.06" /></div>
-          <div class="row"><label>TSL ticks</label><input id="btTslTicks" type="number" step="1" min="1" value="1111" /><span class="hint">live trailing distance in ticks (Ali desk default 1111)</span></div>
+          <div class="row"><label>stop ATR multiplier</label><input id="btTslAtrMult" type="number" step="0.05" min="0" value="1.25" /><span class="hint">stop = multiplier × Wilder ATR(14) of raw bars at entry, fixed per ticket (live 1.25). 0 = use the fixed tick distance below</span></div>
+          <div class="row"><label>TSL ticks</label><input id="btTslTicks" type="number" step="1" min="1" value="1111" /><span class="hint">fixed trailing distance in ticks, used only when the ATR multiplier is 0</span></div>
           <div class="row"><label>tick size</label><input id="btTslTickSize" type="number" step="0.001" min="0.0001" value="0.001" /><span class="hint">XAUUSDm trade_tick_size; distance = ticks × size</span></div>
-          <div class="row"><label>stop slippage (pt)</label><input id="btStopSlip" type="number" step="0.01" min="0" value="0" /><span class="hint">extra adverse fill beyond a touched stop (matches live default 0)</span></div>
+          <div class="row"><label>stop slippage (pt)</label><input id="btStopSlip" type="number" step="0.01" min="0" value="0" /><span class="hint">extra adverse fill beyond a touched stop (live 0)</span></div>
           <div class="row"><label>max positions</label><input id="btMaxpos" type="number" step="1" value="20" /></div>
-          <div class="row"><label>max supp</label><input id="btMaxSupp" type="number" step="1" value="10" /></div>
+          <div class="row"><label>max supp</label><input id="btMaxSupp" type="number" step="1" value="0" /><span class="hint">classic mode only (live 0)</span></div>
           <div class="row"><label>margin min %</label><input id="btMargMin" type="number" step="any" value="75" /></div>
           <div class="row">
             <label>skip worst hours</label>
             <select id="btSkipWorst" style="min-width:280px">
-              <option value="1" selected>ON — skip worst PKT hours</option>
-              <option value="0">OFF — trade all hours</option>
-              <option value="0">OFF</option>
+              <option value="0" selected>OFF — trade all hours (live)</option>
+              <option value="1">ON — skip worst UTC-4 hours</option>
             </select>
           </div>
           <div class="row">
             <label>focus best hours</label>
             <select id="btFocusBest" style="min-width:280px">
-              <option value="1" selected>ON — 2× lot in best PKT hours</option>
-              <option value="0">OFF — same lot</option>
+              <option value="0" selected>OFF — same lot (live)</option>
+              <option value="1">ON — 2× lot in best UTC-4 hours</option>
             </select>
           </div>
           <div class="row">
@@ -974,9 +994,9 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
             <label>Previous body cross</label>
             <span class="hint">Always ON. Buy when this high exceeds the previous body (max of previous open/close). Sell when this low goes under the previous body. Previous wicks are ignored. Fill is that body level (or this open if it gapped through).</span>
           </div>
-          <div class="hint" style="margin-left:128px">TSL = 1111 ticks × 0.001 (= $1.111), moves with every candle <b>close</b> (matches live). Stop is live from the next bar — the entry wick cannot kill the fill. Fill = previous body on the cross candle. Arrow = that same candle.</div>
-          <div class="row"><label>from</label><input id="btFrom" type="datetime-local" style="min-width:220px" /></div>
-          <div class="row"><label>to</label><input id="btTo" type="datetime-local" style="min-width:220px" /></div>
+          <div class="hint" style="margin-left:128px">The stop moves with every candle <b>close</b> and is live from the next bar — the entry wick cannot kill the fill. Fill = previous body on the break candle (or this open on a gap). Arrow = that same candle.</div>
+          <div class="row"><label>from (UTC)</label><input id="btFrom" type="datetime-local" style="min-width:220px" /></div>
+          <div class="row"><label>to (UTC)</label><input id="btTo" type="datetime-local" style="min-width:220px" /></div>
           <div class="row">
             <button class="action" id="btnBtRun">Start backtest</button>
             <button class="secondary" id="btnBtDlTrades">Download trades CSV</button>
@@ -1064,7 +1084,7 @@ Lot    : 0.01   ·   Leverage : 1:100   ·   Block add if margin level would fal
       <div class="bt-sub" id="bt-tv">
         <div class="card">
           <h2>Trading view</h2>
-          <div class="hint">Candles default to <strong>raw MT5 OHLC</strong> — the prices fills and stops actually use. Heikin Ashi is only the signal series (histogram / body-break / X-Trend). A tall HA candle can be a 0.5-point raw bar; the arrow P/L is the closed trade, not the painted body. <strong>Arrows only</strong> (no line-end circles): green/red = primary, blue = SUPP, with profit/loss on the arrow. SUPP needs a <strong>raw</strong> wick break of the last trade candle. Hover or <strong>click</strong> a bar for HA vs raw. Background: <strong>light orange = worst hours</strong> · <strong>light purple = best hours</strong>.</div>
+          <div class="hint">Candles default to <strong>raw MT5 OHLC</strong> — the prices fills and stops actually use. Heikin Ashi is only the signal series (histogram / body-break / X-Trend). <strong>Arrows only</strong>: green/red = first ticket of a run, blue = stacked add (live mode) or SUPP (classic), with profit/loss on the arrow. Hover or <strong>click</strong> a bar for HA vs raw and the gate checks. Background: <strong>light orange = worst hours</strong> · <strong>light purple = best hours</strong> (only matter when the hour filters are ON).</div>
           <div class="row" id="btTvJump">
             <label>year</label>
             <select id="btTvYear" style="min-width:110px"></select>
@@ -3089,7 +3109,11 @@ Short is the mirror.</div>
     // ---- Backtesting (client-side: hist from close, PDF buy+sell, 0.25 pt stop) ----
     const BT_CONTRACT = 100;
     const BT_STOPOUT = 0.50;
-    const BT_TH = 10;
+    // Histogram threshold from the Testing tab (live 15). Bars are re-coloured with it before each run.
+    function btTh() {
+      const v = Number($("btHistThresh") && $("btHistThresh").value);
+      return Number.isFinite(v) && v > 0 ? v : 15;
+    }
     let btBars = [];
     let btSavedMeta = null;
     let btResult = null;
@@ -3327,8 +3351,9 @@ Short is the mirror.</div>
       return rows;
     }
     function btZone(h) {
-      if (h >= BT_TH) return 1;
-      if (h <= -BT_TH) return -1;
+      const th = btTh();
+      if (h >= th) return 1;
+      if (h <= -th) return -1;
       return 0;
     }
     function btColorName(z) { return z > 0 ? "green" : z < 0 ? "red" : "orange"; }
@@ -3446,10 +3471,14 @@ Short is the mirror.</div>
       if (n == null || Number.isNaN(n)) return "—";
       return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
     }
+    // The from/to pickers are in UTC, like every bar time on this page and on MT5.
     function btToLocalInput(ms) {
       const d = new Date(ms);
       const p = n => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+    }
+    function btParseRangeInput(v) {
+      return v ? Date.parse(String(v).length === 16 ? v + ":00Z" : v + "Z") : NaN;
     }
     function btShowData() {
       const n = btBars.length;
@@ -3529,6 +3558,18 @@ Short is the mirror.</div>
       const priWick = cfg.priWick === true;
       const stopSlip = Number.isFinite(+cfg.stopSlip) ? Math.max(0, +cfg.stopSlip) : 0.25;
       const maxSupp = cfg.maxSupp || 10;
+      const everyCandle = cfg.entryEveryCandle === true;
+      const atrMult = Number.isFinite(+cfg.tslAtrMult) ? Math.max(0, +cfg.tslAtrMult) : 0;
+      // Wilder ATR(14) on raw bars, seeded like the engine (mean of the first 14 true ranges).
+      const atr = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) {
+        const b = bars[i];
+        const tr = i === 0 ? b.rawHigh - b.rawLow
+          : Math.max(b.rawHigh - b.rawLow, Math.abs(b.rawHigh - bars[i - 1].rawClose), Math.abs(b.rawLow - bars[i - 1].rawClose));
+        atr[i] = i < 14 ? ((atr[i - 1] || 0) * i + tr) / (i + 1) : atr[i - 1] + (tr - atr[i - 1]) / 14;
+      }
+      // Stop distance for a ticket opened on bar i: ATR-sized once 14 bars are in, else the fixed tick distance.
+      const tslFor = (i) => (atrMult > 0 && i >= 13 && atr[i] > 0) ? atrMult * atr[i] : tslPts;
 
       const lotFor = (tMs) => {
         const h = btHourUtc4(tMs);
@@ -3552,9 +3593,9 @@ Short is the mirror.</div>
         if (eq - usedM(px) < need) { blocked++; return false; }
         return true;
       };
-      const initSl = (entry, want) => want > 0 ? entry - tslPts : entry + tslPts;
+      const initSl = (entry, want, d) => want > 0 ? entry - d : entry + d;
       const haMatch = (b, want) => want > 0 ? b.close > b.open : b.close < b.open;
-      const trailSl = (sl, close, want) => want > 0 ? Math.max(sl, close - tslPts) : Math.min(sl, close + tslPts);
+      const trailSl = (sl, close, want, d) => want > 0 ? Math.max(sl, close - d) : Math.min(sl, close + d);
       const closeOne = (i, p, px, reason) => {
         const grossPnl = (side > 0 ? px - p.entry : p.entry - px) * BT_CONTRACT * p.lot;
         const pnl = grossPnl - p.entryCost;
@@ -3588,7 +3629,8 @@ Short is the mirror.</div>
           side = want; runSide = want; seenAmber = false;
           const fillIdx = fills.length;
           const entryCost = cfg.spread * BT_CONTRACT * lot;
-          positions = [{ entry: fillPx, sl: initSl(fillPx, want), isPrimary: true, lot, fillIdx, openedI: i, entryCost }];
+          const d = tslFor(i);
+          positions = [{ entry: fillPx, sl: initSl(fillPx, want, d), tsl: d, isPrimary: true, lot, fillIdx, openedI: i, entryCost }];
           breakLevel = sigBl;
           bal -= entryCost;
           fills.push({ i, t: bars[i].t, time: bars[i].time, price: fillPx, lot, signalI: markI, sigT,
@@ -3597,15 +3639,17 @@ Short is the mirror.</div>
           return true;
         }
         if (side === 0) side = runSide || want;
-        if (positions.filter(p => !p.isPrimary).length >= maxSupp) return false;
+        if (!everyCandle && positions.filter(p => !p.isPrimary).length >= maxSupp) return false;
         const fillIdx = fills.length;
         const entryCost = cfg.spread * BT_CONTRACT * lot;
-        positions.push({ entry: fillPx, sl: initSl(fillPx, side), isPrimary: false, lot, fillIdx, openedI: i, entryCost });
+        const d = tslFor(i);
+        positions.push({ entry: fillPx, sl: initSl(fillPx, side, d), tsl: d, isPrimary: false, lot, fillIdx, openedI: i, entryCost });
         breakLevel = sigBl;
         bal -= entryCost;
         adds++;
         fills.push({ i, t: bars[i].t, time: bars[i].time, price: fillPx, lot, signalI: markI, sigT,
-          action: side > 0 ? "SUPP_BUY" : "SUPP_SELL", side: side > 0 ? "LONG" : "SHORT", pnl: null, isSupp: true });
+          action: everyCandle ? (side > 0 ? "BUY_ADD" : "SELL_ADD") : (side > 0 ? "SUPP_BUY" : "SUPP_SELL"),
+          side: side > 0 ? "LONG" : "SHORT", pnl: null, isSupp: true });
         openedBars.add(i);
         return true;
       };
@@ -3613,7 +3657,9 @@ Short is the mirror.</div>
         if (!prev) return false;
         return want > 0 ? b.high > Math.max(prev.open, prev.close) : b.low < Math.min(prev.open, prev.close);
       };
+      const fillAtClose = cfg.fillMode === "close";
       const crossFill = (b, prev, want) => {
+        if (fillAtClose) return b.rawClose;
         if (want > 0) {
           const lvl = Math.max(prev.open, prev.close);
           if (b.rawOpen > lvl) return b.rawOpen;
@@ -3711,7 +3757,7 @@ Short is the mirror.</div>
             flatten(i, px, "amber"); runSide = 0; seenAmber = true;
             barFlatReason = "Orange histogram — flatten all positions (no new entries on amber)";
           } else if (positions.length) {
-            if (trailEveryCandle) for (const p of positions) p.sl = trailSl(p.sl, px, side);
+            if (trailEveryCandle) for (const p of positions) p.sl = trailSl(p.sl, px, side, p.tsl);
             if (positions.length && mLevel(px) < BT_STOPOUT) {
               flatten(i, px, "stopout"); runSide = 0;
               barFlatReason = "Margin level stop-out — equity below maintenance";
@@ -3729,15 +3775,25 @@ Short is the mirror.</div>
           breakLevel,
         };
         const openedFrom = positions.length;
-        if (positions.length && zz === (side > 0 ? 1 : -1) && entryOkSupp(b, side)) {
-          tryOpenSupp(i, b, side, lot);
-        }
-        if (!positions.length && runSide !== 0 && zz === (runSide > 0 ? 1 : -1) && entryOkSupp(b, runSide)) {
-          tryOpenSupp(i, b, runSide, lot);
+        if (!everyCandle) {
+          if (positions.length && zz === (side > 0 ? 1 : -1) && entryOkSupp(b, side)) {
+            tryOpenSupp(i, b, side, lot);
+          }
+          if (!positions.length && runSide !== 0 && zz === (runSide > 0 ? 1 : -1) && entryOkSupp(b, runSide)) {
+            tryOpenSupp(i, b, runSide, lot);
+          }
         }
         if (zz === 0) { runSide = 0; breakLevel = null; side = 0; pending = null; }
 
-        if (!positions.length && runSide === 0 && seenAmber) {
+        if (everyCandle) {
+          // Live rules: the primary gate on every green/red candle. Each pass
+          // opens a ticket in the run direction; the opposite colour waits for amber.
+          if (zz !== 0 && (!positions.length || side === zz) && entryOkPrimary(b, prev, zz)) {
+            if (!positions.length) tryOpenPrimary(i, b, prev, zz, lot);
+            else if (hourOk(b.t)) doOpen(i, zz, false, crossFill(b, prev, zz), lot, tradeWick(b, zz), i);
+            else hourSkip++;
+          }
+        } else if (!positions.length && runSide === 0 && seenAmber) {
           let want = 0;
           if (zz === 1 && entryOkPrimary(b, prev, 1)) want = 1;
           else if (zz === -1 && entryOkPrimary(b, prev, -1)) want = -1;
@@ -3750,7 +3806,7 @@ Short is the mirror.</div>
           // winning run. trailSl only tightens toward profit, so risk never widens.
           if (trailEveryCandle && trailEntryBar) {
             for (const p of positions) {
-              if (p.openedI === i) p.sl = trailSl(p.sl, px, side);
+              if (p.openedI === i) p.sl = trailSl(p.sl, px, side, p.tsl);
             }
           }
           captureSlActive();
@@ -3780,7 +3836,7 @@ Short is the mirror.</div>
         bars[i].audit = btBuildBarAudit({
           bar: b, prev, zz,
           snap: snapBeforeEntry,
-          cfg: { xtGate, xtGateSupp, xtBuf, skipWorst, focusBest, maxSupp, hourOk: hourOk(b.t) },
+          cfg: { xtGate, xtGateSupp, xtBuf, skipWorst, focusBest, maxSupp, everyCandle, hourOk: hourOk(b.t) },
           barFill,
           flatReason: barFlatReason,
           slAfter: bars[i].sl,
@@ -3796,8 +3852,9 @@ Short is the mirror.</div>
         closed, fills, equity, alive, bal, adds, blocked, xtSkip, hourSkip,
         start: cfg.start, xtGate, xtBuf, skipWorst, focusBest, priWick, stopSlip,
         executionSource: bars.some(b => b.executionSource === "raw OHLC") ? "raw OHLC" : "signal OHLC fallback",
-        mode: "latest_mods_prev_body_gapopen_025pt_" + (xtGate ? "xt" + xtBuf : "noxt")
-          + "_noha_" + (priWick ? "priwick" : "nopriwick"),
+        everyCandle, atrMult, histThresh: btTh(),
+        mode: (everyCandle ? "every_candle" : "classic_amber_supp") + "__" + (atrMult > 0 ? "atr" + atrMult : "ticks" + tslTicks)
+          + (xtGate ? "__xt" + xtBuf : "__noxt") + (fillAtClose ? "__fill_close" : "__fill_body"),
         suppHit: suppClosed.length ? (100 * suppClosed.filter(x => x.pnl > 0).length / suppClosed.length) : null
       };
     }
@@ -3931,11 +3988,11 @@ Short is the mirror.</div>
         ["primary loss", btFmt(priGl, 2)],
         ["supp profit", btFmt(suppGp, 2)],
         ["supp loss", btFmt(suppGl, 2)],
-        ["supp opened", res.adds || 0],
+        ["adds / supp opened", res.adds || 0],
         ["margin blocks", res.blocked],
         ["hour skips", res.hourSkip || 0],
         ["XT skips", res.xtSkip || 0],
-        ["mode", res.mode || "latest_mods_prev_body_gapopen_025pt"]
+        ["mode", res.mode || "—"]
       ];
       return items.map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join("");
     }
@@ -4243,8 +4300,10 @@ Short is the mirror.</div>
     }
     function btFillLabel(action) {
       const a = String(action || "");
-      if (a === "SUPP_BUY" || a === "BUY_ADD") return "SUPP BUY";
-      if (a === "SUPP_SELL" || a === "SELL_ADD") return "SUPP SELL";
+      if (a === "BUY_ADD") return "ADD BUY";
+      if (a === "SELL_ADD") return "ADD SELL";
+      if (a === "SUPP_BUY") return "SUPP BUY";
+      if (a === "SUPP_SELL") return "SUPP SELL";
       if (a.startsWith("BUY")) return "BUY";
       if (a.startsWith("SELL")) return "SELL";
       if (a === "STOP_OUT") return "STOP OUT";
@@ -4355,7 +4414,9 @@ Short is the mirror.</div>
       let path = "none";
       let want = 0;
       let isPrimary = false;
-      if (snap.posCount > 0 && zz === (snap.side > 0 ? 1 : -1)) {
+      if (cfg.everyCandle) {
+        if (zz !== 0 && (snap.posCount === 0 || snap.side === zz)) { path = zz > 0 ? "stack_buy" : "stack_sell"; want = zz; isPrimary = true; }
+      } else if (snap.posCount > 0 && zz === (snap.side > 0 ? 1 : -1)) {
         path = snap.side > 0 ? "supp_buy" : "supp_sell";
         want = snap.side;
       } else if (snap.posCount === 0 && snap.runSide !== 0 && zz === (snap.runSide > 0 ? 1 : -1)) {
@@ -4385,10 +4446,15 @@ Short is the mirror.</div>
             geom.touching ? "X-Trend line touching — blocks primary when gate ON" : geom.detail,
             !!cfg.xtGate);
 
-          add("seen_amber", "Seen amber (primary arm)", snap.seenAmber,
-            snap.seenAmber ? "armed after orange histogram" : "need orange bar before primary");
-          add("flat_for_primary", "Flat for primary", snap.posCount === 0 && snap.runSide === 0,
-            snap.posCount ? `${snap.posCount} unit(s) still open` : (snap.runSide ? `run_side=${snap.runSide > 0 ? "LONG" : "SHORT"}` : "flat OK"));
+          if (cfg.everyCandle) {
+            add("same_side", "Run direction matches", snap.posCount === 0 || snap.side === want,
+              snap.posCount ? `${snap.posCount} ticket(s) open ${snap.side > 0 ? "LONG" : "SHORT"} — stacking` : "flat — first ticket of a run");
+          } else {
+            add("seen_amber", "Seen amber (primary arm)", snap.seenAmber,
+              snap.seenAmber ? "armed after orange histogram" : "need orange bar before primary");
+            add("flat_for_primary", "Flat for primary", snap.posCount === 0 && snap.runSide === 0,
+              snap.posCount ? `${snap.posCount} unit(s) still open` : (snap.runSide ? `run_side=${snap.runSide > 0 ? "LONG" : "SHORT"}` : "flat OK"));
+          }
         } else {
           const wickLvl = snap.breakLevel;
           const wickPx = buy ? bar.rawHigh : bar.rawLow;
@@ -4418,6 +4484,8 @@ Short is the mirror.</div>
             snap.posCount > 0 || snap.runSide !== 0,
             snap.posCount > 0 ? `${snap.posCount} open` : `flat re-entry run_side=${snap.runSide > 0 ? "LONG" : "SHORT"}`);
         }
+      } else if (cfg.everyCandle && zz !== 0 && snap.posCount > 0) {
+        add("same_side", "Run direction matches", false, "opposite colour while tickets are open — wait for amber");
       } else if (zz === 0 && snap.posCount > 0) {
         add("amber_flat", "Orange flatten (in position)", true, "should exit all units on amber bar");
       } else if (snap.posCount === 0 && snap.runSide === 0 && !snap.seenAmber) {
@@ -4451,7 +4519,7 @@ Short is the mirror.</div>
         noTradeReason = required.filter(c => !c.pass).map(c => `${c.label}: ${c.detail}`).join(" · ");
       } else if (zz === 0) {
         noTradeReason = "Orange histogram — no new entries; flatten if in position";
-      } else if (!snap.seenAmber && snap.posCount === 0 && snap.runSide === 0) {
+      } else if (!cfg.everyCandle && !snap.seenAmber && snap.posCount === 0 && snap.runSide === 0) {
         noTradeReason = "Primary not armed — need orange histogram bar first";
       } else {
         noTradeReason = "No entry setup (histogram / position state does not match a rule path)";
@@ -5562,14 +5630,19 @@ Short is the mirror.</div>
       if (!btBars.length) { toast("Process a CSV first", false); return; }
       try {
         await withBusy(e.currentTarget, async () => {
-          const fromMs = $("btFrom").value ? Date.parse($("btFrom").value) : btBars[0].t;
-          const toMs = $("btTo").value ? Date.parse($("btTo").value) : btBars[btBars.length-1].t;
+          const fromMs = $("btFrom").value ? btParseRangeInput($("btFrom").value) : btBars[0].t;
+          const toMs = $("btTo").value ? btParseRangeInput($("btTo").value) : btBars[btBars.length-1].t;
           // Re-apply X-Trend source so SuperTrend vs KJ can be A/B'd without re-upload.
           btSyncXtSourceSelects(btXtSourceVal());
           btApplyXtSource(btBars, btXtSourceVal());
+          // Re-colour with the Testing threshold (the CSV was coloured at upload time).
+          btBars.forEach(b => { b.zone = btZone(b.hist); b.color = btColorName(b.zone); });
           const slice = btBars.filter(b => b.t >= fromMs && b.t <= toMs);
           if (slice.length < 10) throw new Error("Date range too short");
           btResult = btRun(slice, {
+            entryEveryCandle: $("btEntryMode") ? $("btEntryMode").value === "every" : true,
+            fillMode: $("btFillMode") ? $("btFillMode").value : "body",
+            tslAtrMult: +(($("btTslAtrMult") && $("btTslAtrMult").value) || 0),
             start: +$("btStart").value,
             lev: +$("btLev").value,
             lot: +$("btLot").value,
@@ -5595,6 +5668,7 @@ Short is the mirror.</div>
           btRenderTesting();
         });
         $("btTestMsg").textContent = btResult.closed.length + " trades · end " + btFmt(btResult.bal, 2)
+          + " · " + btResult.mode
           + " · XT=" + (btResult.xtrendSource || "—")
           + " · prev-body fill · " + btResult.executionSource
           + " · net hit " + (btResult.closed.length ? btFmt(100 * btResult.closed.filter(x => x.pnl > 0).length / btResult.closed.length, 1) : "—") + "%"

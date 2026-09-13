@@ -246,12 +246,9 @@
 
   <section class="card span2">
     <div class="note">
-      <strong>__DESK_TITLE__</strong> — engine follows the Demo/Asim histogram rules:
-      <strong>1)</strong> amber/orange arms the run (and flattens open positions);
-      <strong>2)</strong> <strong>primary</strong>: next green/red must <strong>break the previous body</strong> and sit <strong>clear of X-Trend</strong>;
-      <strong>3)</strong> <strong>SUPP</strong>: only needs a <strong>wick break of the last trade candle</strong> (no XT check);
-      <strong>4)</strong> trail every candle (<strong>1.0 pt</strong>, never tighter than broker min ~0.30), entry-bar stop deferred, spread <strong>0.06</strong>.
-      Reference: <strong id="btRef">$500 start → +$15,597.79 net · 78.60% win · 4,561 closed</strong>.
+      <strong>__DESK_TITLE__</strong> — engine mode <strong id="modeNote">waiting for heartbeat</strong>.
+      <strong>Live rules:</strong> on every green/red candle (hist beyond ±<span id="thNote">15</span>) that <strong>breaks the previous body</strong> and sits <strong>clear of X-Trend</strong>, a ticket opens and stacks in the run direction;
+      each ticket trails its own stop (<span id="stopNote">1.25 × ATR(14)</span>) to every bar close; <strong>amber flattens</strong> everything.
       Chart = MT5 live M15. Indicator source: <strong id="sourceNote">waiting for heartbeat</strong>.
       Each bar’s <strong>Why</strong> column explains why a trade was taken or skipped.
     </div>
@@ -377,7 +374,7 @@
     <div class="metrics" style="margin-bottom:.6rem">
       <div class="metric"><div class="lbl">Engine SL now</div><div class="val" id="mEngineSl">—</div></div>
       <div class="metric"><div class="lbl">Live lot</div><div class="val" id="mLiveLot">—</div></div>
-      <div class="metric"><div class="lbl">TSL pts (control)</div><div class="val" id="mTslPts">—</div></div>
+      <div class="metric"><div class="lbl">Stop mode</div><div class="val" id="mStopMode" style="font-size:.85rem">—</div></div>
     </div>
     <div class="scroll tall">
       <table>
@@ -395,8 +392,8 @@
   <section class="card span2" id="liveControls">
     <h2>Live controls — change values without restart</h2>
     <div class="legend">
-      Saves to the GCP desk. The bridge applies them on the next poll (~2s).
-      Lot size maps to VOLUME / ASIM_MT5_LOT.
+      Saves to the GCP desk; the bridge applies them on its next poll (~2 s) and they override its .env until the desk is reset.
+      <span id="ctrlSource"></span>
     </div>
     <div class="metrics" id="ctrlForm" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.5rem">
       <label class="metric"><div class="lbl">VOLUME (lot)</div><input id="cVOLUME" type="number" step="0.01" min="0.01" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
@@ -409,6 +406,19 @@
       <label class="metric"><div class="lbl">MAX_SUPP</div><input id="cMAX_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">BEST_LOT_MULT</div><input id="cBEST_LOT_MULT" type="number" step="0.1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">HIST_THRESH</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">ENTRY_EVERY_CANDLE</div>
+        <select id="cENTRY_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="true">true — stack on every candle (live)</option>
+          <option value="false">false — classic amber / SUPP</option>
+        </select>
+      </label>
+      <label class="metric"><div class="lbl">TSL_ATR_MULT (0 = ticks)</div><input id="cTSL_ATR_MULT" type="number" step="0.05" min="0" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">XTREND_SOURCE</div>
+        <select id="cXTREND_SOURCE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
+          <option value="gaga">gaga — KJ GagaTrend on HA (Ali)</option>
+          <option value="supertrend">supertrend — SuperTrend HA 6/0.8</option>
+        </select>
+      </label>
       <label class="metric"><div class="lbl">TRAIL_EVERY_CANDLE</div>
         <select id="cTRAIL_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
           <option value="true">true</option>
@@ -524,6 +534,8 @@ function humanWhy(codeOrText, bar) {
   const hist = bar?.hist != null ? Number(bar.hist).toFixed(2) : "—";
   const xt = bar?.xtrend != null ? Number(bar.xtrend).toFixed(3) : "—";
   const map = {
+    SKIP_OPPOSITE_SIDE_OPEN: `No entry — hist ${hist} (${z}) is the opposite colour to the open run; waiting for amber.`,
+    MARGIN_STOPOUT: "Exit — margin level fell below the stop-out floor; everything flattened.",
     SKIP_WEEKEND_MARKET_CLOSED: "No trade — weekend market closed.",
     WAITING_FOR_AMBER_ARM: `No trade — hist ${hist} (${z || "—"}) but not amber-armed yet. Need amber after last primary before next entry.`,
     AMBER_ARM_OR_FLAT: `No new entry — amber/orange hist ${hist} arms the engine and flattens open runs.`,
@@ -543,7 +555,7 @@ function humanWhy(codeOrText, bar) {
   if (code.startsWith("STOP_EXIT_")) return `Stop exit — ${code.replace("STOP_EXIT_", "")} unit(s) hit stop on this bar.`;
   if (code.startsWith("ENTRY_FILLED_")) {
     const side = code.replace("ENTRY_FILLED_", "");
-    return `Trade taken — filled ${side}. Hist ${hist} (${z}); amber armed; previous-body break + XT clear passed.`;
+    return `Trade taken — filled ${side}. Hist ${hist} (${z}); previous-body break + X-Trend clear passed.`;
   }
   if (code.startsWith("SKIP_WORST_HOUR_")) return `No trade — worst-hour filter blocked UTC-4 hour ${code.replace("SKIP_WORST_HOUR_", "")}.`;
   return map[code] || raw.replaceAll("_", " ");
@@ -583,6 +595,12 @@ function utcTickMark(time) {
   return `${mo}-${dd} ${hh}:${mm}`;
 }
 
+let lastControls = {};
+// Histogram colour threshold for bars the bridge did not colour (matches the live control).
+function liveThresh() {
+  const t = Number(lastControls.HIST_THRESH);
+  return Number.isFinite(t) && t > 0 ? t : 15;
+}
 let chart, candleSeries, xtSeries, histSeries, slSeries, eqChart, eqSeries;
 let bankChart, floatChart, bankSeries, floatSeries;
 let lastBars = [];
@@ -960,7 +978,7 @@ function barsFromMt5(bars) {
     const col = String(r.histcolor || r.zone || "").toLowerCase();
     const zone = (col === "green" || col === "red" || col === "orange" || col === "amber")
       ? (col === "orange" ? "amber" : col)
-      : (hv >= 10 ? "green" : hv <= -10 ? "red" : "amber");
+      : (hv >= liveThresh() ? "green" : hv <= -liveThresh() ? "red" : "amber");
     const act = String(r.action || "NONE").toUpperCase();
     const whyRaw = String(r.why || r.decision_reason || "");
     const decisionReason = String(r.decision_reason || "");
@@ -1043,7 +1061,6 @@ function ohlcRecordsAsBars(records) {
     why: r.why || r.decision_reason || "",
     decision_reason: r.decision_reason || "",
     forming: r.forming,
-    sl: r.sl,
   }));
 }
 
@@ -1506,7 +1523,7 @@ async function load() {
     $("tradePill").className = "pill " + (tradeOn ? "on" : "off");
     $("tradePill").textContent = tradeOn ? "TRADING MODE ON" : "TRADING MODE OFF";
     $("execPill").className = "pill " + (mt5Bars ? "on" : "off");
-    $("execPill").textContent = mt5Bars ? "EXECUTION: MT5 BARS" : "EXECUTION: AWS";
+    $("execPill").textContent = mt5Bars ? "EXECUTION: MT5 BARS" : "EXECUTION: NOT MT5";
     const valueSource = String(b.values_source || "UNKNOWN").toUpperCase();
     const terminalValues = valueSource === "MT5_TERMINAL";
     $("valuePill").className = "pill " + (terminalValues ? "on" : "warn");
@@ -1591,8 +1608,20 @@ async function load() {
     $("mXt").textContent = fmt(current.xtrend) + (b.xtrend_source || bridge.xtrend_source ? (" · " + (b.xtrend_source || bridge.xtrend_source)) : "");
     $("mEngineSl").textContent = fmt(bridge.engine_sl);
     $("mLiveLot").textContent = fmt(bridge.lot != null ? bridge.lot : (b.controls || {}).VOLUME, 2);
-    $("mTslPts").textContent = fmt((b.controls || {}).TSL_PTS);
-    fillControls(b.controls || bridge.live_controls || {});
+    lastControls = b.controls || {};
+    const atrMult = Number(bridge.tsl_atr_mult != null ? bridge.tsl_atr_mult : lastControls.TSL_ATR_MULT);
+    $("mStopMode").textContent = atrMult > 0
+      ? ("ATR × " + atrMult + (bridge.engine_mode ? " · " + bridge.engine_mode : ""))
+      : ((lastControls.TSL_TICKS || "—") + " ticks fixed");
+    if ($("modeNote")) $("modeNote").textContent = bridge.engine_mode || (bridge.entry_every_candle === false ? "classic (amber-armed)" : "every candle");
+    if ($("thNote")) $("thNote").textContent = String(bridge.hist_thresh != null ? bridge.hist_thresh : liveThresh());
+    if ($("stopNote")) $("stopNote").textContent = atrMult > 0 ? (atrMult + " × ATR(14)") : ((lastControls.TSL_TICKS || 1111) + " ticks");
+    if ($("ctrlSource")) {
+      $("ctrlSource").textContent = lastControls.updated_at
+        ? ("Saved on this desk " + fmtUtc(lastControls.updated_at) + " by " + (lastControls.updated_by || "?") + " — overrides the bridge .env")
+        : "Nothing saved here yet — the bridge's .env on Ali PC governs (values below are the desk defaults)";
+    }
+    fillControls(lastControls);
     const currentZone = current.zone || current.histcolor || "";
     $("mHist").textContent = current.hist != null ? (fmt(current.hist) + " " + currentZone.toUpperCase()) : "—";
     $("mHist").className = "val " + (currentZone === "green" ? "up" : currentZone === "red" ? "down" : "");
@@ -1989,13 +2018,14 @@ $("tabExec").onclick = () => {
 
 const CTRL_KEYS = [
   "VOLUME","TSL_TICKS","TSL_TICK_SIZE","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
-  "BEST_LOT_MULT","HIST_THRESH","TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR",
-  "DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
+  "BEST_LOT_MULT","HIST_THRESH","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
+  "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
 ];
 const BOOL_CTRL_KEYS = new Set([
-  "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS",
+  "ENTRY_EVERY_CANDLE","TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS",
   "XTREND_GATE","XTREND_GATE_SUPP"
 ]);
+const TEXT_CTRL_KEYS = new Set(["XTREND_SOURCE"]);
 
 function toBoolLabel(v) {
   if (v === true || v === "true" || v === 1 || v === "1") return "true";
@@ -2021,6 +2051,10 @@ $("btnSaveControls").onclick = async () => {
     if (!el) return;
     if (BOOL_CTRL_KEYS.has(k)) {
       payload[k] = fromBoolLabel(el.value);
+      return;
+    }
+    if (TEXT_CTRL_KEYS.has(k)) {
+      payload[k] = String(el.value || "").trim().toLowerCase();
       return;
     }
     const n = Number(el.value);

@@ -1,16 +1,13 @@
 # Ali PC Deployment — START HERE
 
-**What this pack is:** everything Ali needs on a **Windows PC** to run MetaTrader 5, the Onyxion bridge, and push live ticks/trades to the **Ali GCP desk**.
+**What this pack is:** everything Ali needs on a **Windows PC** to run MetaTrader 5, the Onyxion bridge, and push live bars / trades / heartbeats to the **Ali GCP desk**.
 
-**GCP desk (one VM does both live + backtest):**
-| Role | URL | Login |
-|------|-----|-------|
-| Live trading dashboard | https://35.253.21.246/live | `ali` / `123451` |
-| Backtest UI | https://35.253.21.246/ | `ali` / `123451` |
-| Bridge auto-update zip | https://35.253.21.246/bridge/onyxion-bridge-bundle.zip | (no auth; firewall IP only) |
+| Role | URL |
+|------|-----|
+| Live trading dashboard | https://35.253.21.246/live |
+| Backtest UI | https://35.253.21.246/ |
 
-VM name: `instance-20260831-171822` (us-central1-a).  
-**If the VM is stopped/started, the external IP can change** — update `ASIM_LAB_URL` and `BRIDGE_UPDATE_URL` in `C:\onyxion-ali\.env`.
+VM `instance-20260831-171822` (us-central1-a). If the VM is restarted the external IP can change — update `ASIM_LAB_URL` in `C:\onyxion-ali\.env`.
 
 Full connect checklist: **`CONNECT_LIVE.md`**.
 
@@ -18,47 +15,25 @@ Full connect checklist: **`CONNECT_LIVE.md`**.
 
 ## 5-minute outline
 
-1. Copy this whole **`Ali PC Deployment`** folder to Ali’s Windows PC.
-2. Install **Python 3.11+ 64-bit** (check “Add to PATH”).
-3. Open **Admin PowerShell**:
+1. Copy this **`Ali PC Deployment`** folder to the PC (or clone the repo to `C:\onyxion-src\Latest_Gold_Trading_Bot`).
+2. Install **Python 3.11+ 64-bit** and **Git**.
+3. In PowerShell:
 
 ```powershell
 cd "PATH\TO\Ali PC Deployment"
-powershell -ExecutionPolicy Bypass -File .\INSTALL.ps1 -InstallMt5
+powershell -ExecutionPolicy Bypass -File .\INSTALL.ps1
 ```
 
-4. Open MT5 → log in demo **472640728** / server **Exness-MT5Trial16** → enable Algo Trading → XAUUSDm **M15**.
-5. Compile MQ5 and attach **OnyxionHistogram** + **OnyxionXTrendProxy** (KJ Gaga) — see `mq5\CHART_SETUP.md`.
-6. Healthcheck, then start bridge (commands printed by INSTALL.ps1). Keep Python/watchdog running.
-7. Confirm https://35.253.21.246/live shows MT5 online and **UTC** bar times matching MT5.
-
-**Using Claude/Cursor on Ali’s PC?** Paste `prompts\CLAUDE_SETUP_PROMPT.md` into the chat (full step-by-step).
+4. Install the portable Exness MT5 to `C:\onyxion-ali\exness-mt5`, log in demo **472640728** / **Exness-MT5Trial16**, enable Algo Trading, open XAUUSDm **M15**.
+5. Compile the MQ5 indicators (`mq5\CHART_SETUP.md`) — optional, for the chart only.
+6. Fill `ASIM_MT5_PASSWORD` in `C:\onyxion-ali\.env`, then double-click `C:\onyxion-ali\START_BOT.bat`.
+7. Confirm https://35.253.21.246/live shows MT5 ONLINE and the Ali PC panel shows all processes running.
 
 ---
 
-## Account (Exness demo)
+## Engine rules on this pack
 
-| Field | Value |
-|-------|-------|
-| Login | `472640728` |
-| Server | `Exness-MT5Trial16` |
-| Symbol | `XAUUSDm` |
-| Password | in `env\.env.ali.example` → copied to `C:\onyxion-ali\.env` |
-| X-Trend | **gaga** (KJ GagaTrend) — required for Ali |
-
----
-
-## Engine rules on this pack (synced with live desk)
-
-| Rule | Value |
-|------|--------|
-| Primary entry | Previous-body break + X-Trend clear |
-| SUPP entry | **Raw** wick of last trade candle only (`XTREND_GATE_SUPP=0`) |
-| Entry-bar trail | **ON** (`TRAIL_ENTRY_BAR=1`) — stop trails to entry-bar close; entry bar is not stop-tested |
-| Fills / stops | Raw MT5 OHLC (not HA body size) |
-| Hour filters | **OFF** (`SKIP_WORST_HOURS=0`, `FOCUS_BEST_HOURS=0`) |
-| Chart clock | **UTC** on MT5 and live desk (same M15 bar times) |
-| Details | `docs\TRADING_RULES.md` |
+See `../TRADING_RULES.md`. Short version: every green/red candle that breaks the previous HA body and sits clear of X-Trend opens a ticket (stacking); each ticket trails a 1.25 × ATR(14) stop to every close; amber flattens.
 
 ---
 
@@ -66,36 +41,22 @@ powershell -ExecutionPolicy Bypass -File .\INSTALL.ps1 -InstallMt5
 
 ```
 Ali PC Deployment/
-  INSTALL.ps1                 ← one-shot installer
-  START_HERE.md               ← this file
-  CONNECT_LIVE.md             ← MT5 ↔ GCP live link checklist
-  README.md
-  env/.env.ali.example        ← secrets template + live URLs
-  runtime/                    ← bridge Python code (synced with GCP desk)
-  scripts/                    ← install / start / auto-update / sync_runtime_from_gcp_app.ps1
-  mq5/                        ← Histogram + KJ X-Trend (Gaga) + EAs; see CHART_SETUP.md
-  dist/onyxion-bridge-bundle.zip  ← same zip published to GCP /bridge/
-  docs/TRADING_RULES.md
-  prompts/CLAUDE_SETUP_PROMPT.md  ← check install → start one-by-one → verify GCP → keep Python up
+  INSTALL.ps1                 one-shot installer / upgrader (venv, tasks, files)
+  START_BOT.bat / CHECK_BOT.bat / STOP_BOT.bat
+  fix_script_encoding.ps1     UTF-8 BOM repair for PowerShell 5.1
+  env/.env.ali.example        config template (source of truth once copied to C:\onyxion-ali\.env)
+  runtime/                    bridge, engine, watchdog, monitor, GitHub agent, safety gate, tests
+  scripts/                    start / launch / update / verify / task registration
+  mq5/                        Histogram + KJ X-Trend (Gaga) indicators for the chart
+  *.html                      backtest and live-trade reports
 ```
 
-After install, live code lives in **`C:\onyxion-ali\`**. To refresh engine files from the repo before shipping the pack:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File ".\Ali PC Deployment\scripts\sync_runtime_from_gcp_app.ps1"
-```
-
----
-
-## Firewall (important)
-
-Ali’s **public IP** (`https://ifconfig.me`) must be allowed on GCP firewall rule `allow-asim-live-443` as `/32`.  
-If dashboard or bundle download fails, send the public IP to Onyxion to whitelist.
+Live code lives in **`C:\onyxion-ali\`**; the GitHub agent keeps it in sync with `main` (candle-safe, never flattens).
 
 ---
 
 ## Safety
 
-- Demo account only.
-- Do not commit `.env` or share passwords in public chat.
-- Do not use `--force-action` on the bridge unless Onyxion asks.
+- Demo account only (the bridge refuses a real account).
+- Never commit `.env`; never paste passwords in chat.
+- Updates never touch `.env` or `state\` and never close positions.

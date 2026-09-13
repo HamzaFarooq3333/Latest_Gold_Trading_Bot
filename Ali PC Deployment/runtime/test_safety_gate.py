@@ -1,12 +1,26 @@
 """Unit tests for safety_gate_check pass/fail trees."""
 from __future__ import annotations
 
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from safety_gate_check import run_gate
+
+# Minimal engine that satisfies the gate's symbol check.
+ENGINE_STUB = "\n".join([
+    "def tsl_distance():",
+    "    return 1.111",
+    "def effective_hist_thresh():",
+    "    return 15.0",
+    "class LatestModsEngine:",
+    "    pass",
+    "class Mt5LiveEngine:",
+    "    pass",
+    "",
+])
+APP_FILES = ("server.py", "broker_live.py", "gcp_main.py", "auth.py", "lab_api.py", "lab_core.py")
+STATIC_FILES = ("live_dashboard.html", "dashboard.html", "login.html")
 
 
 def _write(path: Path, text: str) -> None:
@@ -18,16 +32,9 @@ class SafetyGateTests(unittest.TestCase):
     def test_good_runtime_tree_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for name in (
-                "bridge_trader.py",
-                "mt5_live_engine.py",
-                "watchdog_exness.py",
-            ):
-                _write(root / name, "x = 1\n")
-            _write(
-                root / "mt5_live_engine.py",
-                "def tsl_distance(a, b):\n    return abs(a - b)\nTSL_PTS = 1.0\n",
-            )
+            _write(root / "bridge_trader.py", "x = 1\n")
+            _write(root / "watchdog_exness.py", "x = 1\n")
+            _write(root / "mt5_live_engine.py", ENGINE_STUB)
             _write(root / "VERSION.json", '{"version": "test"}\n')
             result = run_gate(root, require_dashboard=False)
             self.assertTrue(result["ok"], result["errors"])
@@ -36,32 +43,35 @@ class SafetyGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(root / "bridge_trader.py", "def broken(\n")
-            _write(
-                root / "mt5_live_engine.py",
-                "def tsl_distance(a, b):\n    return 1\nTSL_PTS = 1\n",
-            )
+            _write(root / "mt5_live_engine.py", ENGINE_STUB)
             _write(root / "watchdog_exness.py", "x = 1\n")
             _write(root / "VERSION.json", '{"version": "test"}\n')
             result = run_gate(root, require_dashboard=False)
             self.assertFalse(result["ok"])
-            self.assertTrue(any("bridge_trader" in e or "invalid" in e.lower() or "syntax" in e.lower() or "(" in e for e in result["errors"]))
+            self.assertTrue(any("bridge_trader" in e for e in result["errors"]))
+
+    def test_engine_missing_symbol_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "bridge_trader.py", "x = 1\n")
+            _write(root / "watchdog_exness.py", "x = 1\n")
+            _write(root / "mt5_live_engine.py", "class LatestModsEngine:\n    pass\n")
+            _write(root / "VERSION.json", '{"version": "test"}\n')
+            result = run_gate(root, require_dashboard=False)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Mt5LiveEngine" in e for e in result["errors"]))
 
     def test_missing_dashboard_fails_when_ui_tree_present(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             app = root / "Google Console Deployment" / "app"
-            _write(app / "server.py", "x = 1\n")
-            _write(app / "broker_live.py", "x = 1\n")
-            _write(app / "gcp_main.py", "x = 1\n")
-            static = app / "static"
-            static.mkdir(parents=True)
-            # Intentionally omit live_dashboard.html / dashboard.html
+            for name in APP_FILES:
+                _write(app / name, "x = 1\n")
+            (app / "static").mkdir(parents=True)
+            # Intentionally omit the dashboard pages
             rt = root / "Ali PC Deployment" / "runtime"
             _write(rt / "bridge_trader.py", "x = 1\n")
-            _write(
-                rt / "mt5_live_engine.py",
-                "def tsl_distance(a, b):\n    return 1\nTSL_PTS = 1\n",
-            )
+            _write(rt / "mt5_live_engine.py", ENGINE_STUB)
             _write(rt / "watchdog_exness.py", "x = 1\n")
             _write(rt / "VERSION.json", '{"version": "test"}\n')
             result = run_gate(root, require_dashboard=True)
@@ -69,29 +79,19 @@ class SafetyGateTests(unittest.TestCase):
             self.assertTrue(any("dashboard" in e for e in result["errors"]))
 
     def test_repo_layout_with_dashboards_passes(self):
-        # Use a minimal synthetic repo layout (not the whole workspace — faster/isolated).
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rt = root / "Ali PC Deployment" / "runtime"
             app = root / "Google Console Deployment" / "app"
-            static = app / "static"
-            for name in (
-                "bridge_trader.py",
-                "watchdog_exness.py",
-                "connection_monitor.py",
-                "github_update_agent.py",
-                "safety_gate_check.py",
-            ):
+            for name in ("bridge_trader.py", "watchdog_exness.py", "connection_monitor.py",
+                         "github_update_agent.py", "safety_gate_check.py"):
                 _write(rt / name, "x = 1\n")
-            _write(
-                rt / "mt5_live_engine.py",
-                "def tsl_distance(a, b):\n    return 1\nTSL_PTS = 1\n",
-            )
+            _write(rt / "mt5_live_engine.py", ENGINE_STUB)
             _write(rt / "VERSION.json", '{"version": "test"}\n')
-            for name in ("server.py", "broker_live.py", "gcp_main.py", "auth.py"):
+            for name in APP_FILES:
                 _write(app / name, "x = 1\n")
-            _write(static / "live_dashboard.html", "<html></html>\n")
-            _write(static / "dashboard.html", "<html></html>\n")
+            for name in STATIC_FILES:
+                _write(app / "static" / name, "<html></html>\n")
             result = run_gate(root, require_dashboard=True)
             self.assertTrue(result["ok"], result["errors"])
 

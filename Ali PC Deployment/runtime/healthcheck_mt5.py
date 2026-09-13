@@ -1,4 +1,10 @@
-"""No-trade MT5 connectivity check for the dedicated EC2 Exness terminal."""
+"""No-trade MT5 connectivity check for the portable Exness terminal on Ali PC.
+
+    python healthcheck_mt5.py --env C:\\onyxion-ali\\.env
+
+Exit 0 = the account in .env is logged in, is a demo, XAUUSDm is tradable and
+161 M15 bars are available (the bridge's indicator window).
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ import MetaTrader5 as mt5
 
 def load_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -21,53 +27,38 @@ def load_env(path: Path) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", default=r"C:\onyxion\.env")
-    parser.add_argument("--model", choices=("ASIM", "DEMO"), default="ASIM")
+    parser.add_argument("--env", default=r"C:\onyxion-ali\.env")
+    parser.add_argument("--model", default="ASIM", help="env key prefix (only ASIM exists)")
     args = parser.parse_args()
     env = load_env(Path(args.env))
-
     prefix = args.model.upper()
     login = int(env[f"{prefix}_MT5_LOGIN"])
     server = env[f"{prefix}_MT5_SERVER"]
     symbol = env.get(f"{prefix}_MT5_SYMBOL", "XAUUSDm")
     terminal = env.get(f"{prefix}_MT5_TERMINAL_PATH") or env.get("MT5_TERMINAL_PATH")
     password = env[f"{prefix}_MT5_PASSWORD"]
-    portable = (env.get(f"{prefix}_MT5_PORTABLE", "1").lower() in ("1", "true", "yes", "on"))
+    portable = env.get(f"{prefix}_MT5_PORTABLE", "1").lower() in ("1", "true", "yes", "on")
     if terminal and not Path(terminal).is_file():
         print(f"FAIL terminal_missing path={terminal}")
         return 1
-
-    kwargs = {
-        "login": login,
-        "password": password,
-        "server": server,
-        "timeout": 60000,
-        "portable": portable,
-    }
+    kwargs = {"login": login, "password": password, "server": server, "timeout": 60000, "portable": portable}
     ok = mt5.initialize(terminal, **kwargs) if terminal else mt5.initialize(**kwargs)
     if not ok:
         print(f"FAIL initialize error={mt5.last_error()}")
         return 2
     try:
-        info = mt5.account_info()
-        if info is None:
-            print("FAIL account_info is None")
-            return 3
-        terminal_info = mt5.terminal_info()
-        if terminal_info is None:
-            print(f"FAIL terminal_info is None error={mt5.last_error()}")
+        info, terminal_info = mt5.account_info(), mt5.terminal_info()
+        if info is None or terminal_info is None:
+            print(f"FAIL account/terminal info unavailable error={mt5.last_error()}")
             return 3
         actual_server = str(getattr(info, "server", "") or "")
-        print(
-            f"ACCOUNT login={info.login} server={actual_server} "
-            f"trade_mode={info.trade_mode} "
-            f"terminal_trade_allowed={getattr(terminal_info, 'trade_allowed', None)}"
-        )
+        print(f"ACCOUNT login={info.login} server={actual_server} trade_mode={info.trade_mode} "
+              f"terminal_trade_allowed={getattr(terminal_info, 'trade_allowed', None)}")
         if int(info.login) != login or actual_server.casefold() != server.casefold():
             print(f"FAIL expected login={login} server={server}")
             return 4
         if int(getattr(info, "trade_mode", 2)) == 2:
-            print(f"FAIL {args.model} account is real; demo-only runtime refuses to trade")
+            print("FAIL account is REAL; demo-only runtime refuses to trade")
             return 4
         if not mt5.symbol_select(symbol, True):
             print(f"FAIL symbol_select symbol={symbol} error={mt5.last_error()}")
@@ -77,17 +68,11 @@ def main() -> int:
         if symbol_info is None or rates is None or len(rates) < 161:
             print(f"FAIL symbol_or_bars symbol={symbol} bars={0 if rates is None else len(rates)}")
             return 6
-        if getattr(symbol_info, "trade_mode", None) == getattr(
-            mt5, "SYMBOL_TRADE_MODE_DISABLED", 0
-        ):
+        if getattr(symbol_info, "trade_mode", None) == getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0):
             print(f"FAIL symbol trading disabled symbol={symbol}")
             return 7
-        print(
-            f"PASS symbol={symbol} bars={len(rates)} "
-            f"trade_allowed={getattr(info, 'trade_allowed', None)} "
-            f"terminal_trade_allowed={getattr(terminal_info, 'trade_allowed', None)} "
-            f"m15_last={int(rates[-1]['time'])}"
-        )
+        print(f"PASS symbol={symbol} bars={len(rates)} trade_allowed={getattr(info, 'trade_allowed', None)} "
+              f"terminal_trade_allowed={getattr(terminal_info, 'trade_allowed', None)} m15_last={int(rates[-1]['time'])}")
         return 0
     finally:
         mt5.shutdown()

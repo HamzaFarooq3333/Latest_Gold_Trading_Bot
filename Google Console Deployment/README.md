@@ -19,7 +19,7 @@ Browser will still warn about the **self-signed certificate** — click Advanced
 | Name | URL | Login |
 |---|---|---|
 | hamzatestserver01 | https://35.232.76.12/live | **hamza** / 123451 |
-| instance-20260831-171822 | https://35.223.235.204/live | **ali** / 123451 |
+| instance-20260831-171822 | https://35.253.21.246/live | **ali** / 123451 |
 
 MT5 bridge endpoints (`/api/broker/*`) stay open for the bridge — still protected by the IP firewall.
 

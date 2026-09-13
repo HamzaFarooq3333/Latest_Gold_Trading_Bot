@@ -1,93 +1,69 @@
 # Connect Ali PC (MT5) → GCP live desk
 
-This pack runs **MetaTrader 5 on Ali’s Windows PC** and posts bars / deals / heartbeats to the **Ali GCP desk**. The Linux VM is the dashboard + decision host; this PC is the execution / feed machine.
+The PC runs MetaTrader 5 and the bridge; the Linux VM hosts the dashboard. Nothing on the PC ever redeploys the VM.
 
-## Live link (current)
+## Link
 
-| Role | URL |
-|------|-----|
+| Role | Value |
+|------|-------|
 | Live dashboard | https://35.253.21.246/live |
 | Backtest UI | https://35.253.21.246/ |
-| Bridge auto-update zip | https://35.253.21.246/bridge/onyxion-bridge-bundle.zip |
-| Browser login | `ali` / `123451` |
 | GCP VM | `instance-20260831-171822` (us-central1-a) |
+| Bridge endpoints | `/api/broker/heartbeat`, `/api/broker/execution`, `/api/broker/controls`, `/api/broker/ali_pc_status` |
 
-If the VM is restarted, the external IP can change. Update **both** `ASIM_LAB_URL` and `BRIDGE_UPDATE_URL` in `C:\onyxion-ali\.env`.
+If the VM is restarted the external IP can change: update `ASIM_LAB_URL` in `C:\onyxion-ali\.env`.
 
 ## What must match
 
 | Setting | Value |
-|---------|--------|
-| MT5 login | `472640728` |
-| MT5 server | `Exness-MT5Trial16` |
+|---------|-------|
+| MT5 login / server | `472640728` / `Exness-MT5Trial16` |
 | Symbol | `XAUUSDm` |
 | `XTREND_SOURCE` | `gaga` |
-| `XTREND_GATE` | `1` (primary) |
-| `XTREND_GATE_SUPP` | `0` (SUPP = raw wick only) |
-| `TRAIL_ENTRY_BAR` | `1` |
-| `ENTRY_BAR_MODE` | `defer` |
-| `SKIP_WORST_HOURS` | `0` (OFF) |
-| `FOCUS_BEST_HOURS` | `0` (OFF) |
-| Chart / feed time | **UTC** (MT5 Exness bar open = live desk axis) |
-| `ASIM_LAB_INSECURE` | `1` (desk uses self-signed HTTPS) |
+| `ENTRY_EVERY_CANDLE` / `HIST_THRESH` / `TSL_ATR_MULT` | `1` / `15` / `1.25` |
+| `VOLUME` / `MAXPOS` / `MAX_SUPP` | `0.02` / `20` / `0` |
+| `SKIP_WORST_HOURS` / `FOCUS_BEST_HOURS` / `SKIP_WEEKENDS` | `0` / `0` / `0` |
+| `ASIM_LAB_INSECURE` | `1` (self-signed HTTPS on the desk) |
+| Clock | UTC on MT5 (Exness) and on the desk chart |
 
-## Connect checklist
+## Checklist
 
-1. **Firewall** — this PC’s public IP (`https://ifconfig.me`) must be on GCP rule `allow-asim-live-443` as `/32`.
-2. **Install pack**
+1. **Firewall** — this PC's public IP (`https://ifconfig.me`) must be allowed on GCP rule `allow-asim-live-443`.
+2. **Install** — `INSTALL.ps1` (see `START_HERE.md`).
+3. **Healthcheck**
    ```powershell
-   cd "...\Ali PC Deployment"
-   powershell -ExecutionPolicy Bypass -File .\INSTALL.ps1 -InstallMt5
+   C:\onyxion-ali\venv\Scripts\python.exe C:\onyxion-ali\healthcheck_mt5.py --env C:\onyxion-ali\.env
    ```
-3. **Confirm `.env`** points at `https://35.253.21.246` (see `env\.env.ali.example`).
-4. **MT5** — login demo, Algo Trading ON, XAUUSDm **M15**, compile/attach Histogram + XTrendProxy (KJ Gaga). See `mq5\CHART_SETUP.md`.
-5. **Healthcheck**
+4. **Start** — `C:\onyxion-ali\START_BOT.bat` (or `Get-ScheduledTask 'OnyxionAli-*' | Start-ScheduledTask`).
+5. **Verify**
    ```powershell
-   python C:\onyxion-ali\healthcheck_mt5.py --env C:\onyxion-ali\.env --model ASIM
+   powershell -ExecutionPolicy Bypass -File C:\onyxion-ali\scripts\verify_live_connection.ps1
    ```
-6. **Start bridge** (keep Python/watchdog running)
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File C:\onyxion-ali\scripts\start_bridge_stack.ps1 -Profile ali
-   ```
-7. **Verify**
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File C:\onyxion-ali\scripts\verify_live_connection.ps1 -Profile ali
-   ```
-8. **Prove the link**
-   - Browser → https://35.253.21.246/live → login `ali` / `123451`
-   - Heartbeats advancing, MT5 account `472640728`, symbol `XAUUSDm`
-   - Chart candles + axis in **UTC** matching MT5 M15; feed timestamps updating each heartbeat
-   - Bridge logs under `C:\onyxion-ali\logs\`
+6. **Prove the link** — `/live` shows `BRIDGE LIVE`, login `472640728`, `TRADING MODE ON`, candles advancing; `CHECK_BOT.bat` prints `LIVE heartbeat Ns ago`.
 
 ## How the link works
 
 ```
 Ali PC MT5 (XAUUSDm M15)
-        │
+        │  closed bars + live tick
         ▼
-bridge_trader.py  (+ mt5_live_engine.py)
-        │  HTTPS POST / heartbeat / deals
+bridge_trader.py + mt5_live_engine.py      state\asim_mt5_engine_state.json
+        │  HTTPS POST heartbeat / execution / status every 2 s
         ▼
-https://35.253.21.246  →  /opt/asim-gcp on GCP
-        │
-        ├── /live     live desk UI
-        └── /         backtest UI (same VM)
+https://35.253.21.246  (FastAPI /opt/asim-gcp)
+        ├── /live   live desk
+        └── /       lab + backtest UI (same rules engine)
 ```
 
-Auto-update (every 15 min) pulls `BRIDGE_UPDATE_URL` and refreshes Python + MQ5 on the PC. After a desk IP change, fix `.env` first or auto-update will fail.
+## Logs on the PC (`C:\onyxion-ali\logs\`)
 
-## Strategy logic on this pack (synced 2026-09-05)
+| File | What |
+|------|------|
+| `bridge_YYYYMMDD.log` | every bar decision and order (14-day retention) |
+| `bridge_asim_stderr.log` | crash tracebacks only |
+| `connection_check.log` / `data_heartbeat.log` / `errors.log` | connection monitor |
+| `github_update_agent.log` / `auto_update.log` / `update_history.log` | GitOps |
 
-See `docs\TRADING_RULES.md`. Short version:
+## Updating the code
 
-- **Primary:** previous-body break + X-Trend clear  
-- **SUPP:** raw wick break of last trade candle only (`XTREND_GATE_SUPP=0`)  
-- **Stops:** trail every candle including entry-bar close (`TRAIL_ENTRY_BAR=1`); entry bar is not stop-tested  
-- Fills / stops use **raw MT5 OHLC**, not Heikin Ashi bodies  
-
-## Force refresh after desk publishes a new bundle
-
-```powershell
-powershell -ExecutionPolicy Bypass -File C:\onyxion-ali\scripts\auto_update_bridge.ps1 -Force
-powershell -ExecutionPolicy Bypass -File C:\onyxion-ali\scripts\start_bridge_stack.ps1 -Profile ali
-```
+Push to `main` of `HamzaFarooq3333/Latest_Gold_Trading_Bot`. The GitHub agent on the PC detects it within ~90 s, waits for the current M15 candle to close, runs the safety gate, copies the runtime and restarts the bridge; the first candle after the restart takes no new entries. Open tickets and their stops are preserved.

@@ -21,7 +21,6 @@ import json
 import os
 import ssl
 import subprocess
-import sys
 import time
 import traceback
 import urllib.request
@@ -211,11 +210,10 @@ def desk_heartbeat(lab_url: str) -> tuple[bool, str]:
 def stale_code_running() -> tuple[bool, str]:
     """True when bridge_trader.py on disk is newer than the process running it.
 
-    auto_update_bridge.ps1 syncs new code and then restarts the bridge. If that
-    restart fails - and it does, because the sync strips the UTF-8 BOM off
-    scripts\\*.ps1 and PowerShell 5.1 then cannot parse start_bridge_stack.ps1 -
-    the old process keeps running the old code indefinitely while the files on
-    disk look correct. Version drift is the only reliable signal for that.
+    Belt and braces behind auto_update_bridge.ps1's own restart: if that
+    restart ever fails again, the old process would keep trading the old
+    logic while the files on disk look correct. The updater stamps copied
+    files with the copy time so this comparison stays meaningful.
     """
     ps = (
         "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "

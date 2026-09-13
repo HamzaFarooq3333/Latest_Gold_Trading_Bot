@@ -4,8 +4,8 @@ identified by the model_name argument, so nothing here is lab-specific.
 
 This module does not decide BUY/SELL. server.py does that. Here we:
 
-  - persist feeds / output profiles / decision rows (S3 if LAB_STORE_BUCKET
-    is set, otherwise /tmp which dies when Lambda goes cold)
+  - persist feeds / output profiles / decision rows as JSON under
+    GCP_STORE_DIR (falls back to the system temp dir)
   - turn a model action into CFD paper P/L (apply_paper_action)
   - pull recent gold_ohlc rows from Google Sheets for warmup
   - push decision rows to the Apps Script webhook if one is configured
@@ -239,26 +239,9 @@ def default_store(model_name: str) -> dict:
     }
 
 
-def _bucket() -> str:
-    return os.environ.get("LAB_STORE_BUCKET", "").strip()
-
-
-def _key(model_name: str) -> str:
-    return os.environ.get(
-        "LAB_STORE_KEY",
-        f"lab/{model_name.lower()}/store.json",
-    ).strip()
-
-
-# Backtest CSV lives next to store.json, not inside it. Refreshing the dashboard
+# Backtest CSV lives next to the store, not inside it. Refreshing the dashboard
 # must not lose this file; Clear Data must not delete it. Replace only.
 MAX_DATASET_BYTES = 5_500_000
-
-
-def dataset_keys(model_name: str) -> tuple[str, str]:
-    store_key = _key(model_name)
-    prefix = store_key.rsplit("/", 1)[0] if "/" in store_key else f"lab/{(model_name or 'model').lower()}"
-    return f"{prefix}/backtest-dataset.csv", f"{prefix}/backtest-dataset.json"
 
 
 def _dataset_tmp_paths(model_name: str) -> tuple[Path, Path]:
@@ -287,32 +270,9 @@ def _count_csv_data_rows(text: str) -> int:
 
 def dataset_meta(model_name: str) -> dict:
     """Filename / size of the saved backtest CSV. present=False if none yet."""
-    csv_key, meta_key = dataset_keys(model_name)
     csv_tmp, meta_tmp = _dataset_tmp_paths(model_name)
-    bucket = _bucket()
     meta: dict[str, Any] = {}
-    if bucket:
-        try:
-            import boto3
-
-            obj = boto3.client("s3").get_object(Bucket=bucket, Key=meta_key)
-            meta = json.loads(obj["Body"].read().decode("utf-8"))
-        except Exception as e:
-            if "NoSuchKey" not in str(e) and "404" not in str(e) and "Not Found" not in str(e):
-                pass
-            try:
-                import boto3
-
-                head = boto3.client("s3").head_object(Bucket=bucket, Key=csv_key)
-                meta = {
-                    "filename": csv_key.rsplit("/", 1)[-1],
-                    "bytes": int(head.get("ContentLength") or 0),
-                    "rows": None,
-                    "uploaded_at": str(head.get("LastModified") or ""),
-                }
-            except Exception:
-                meta = {}
-    elif meta_tmp.is_file():
+    if meta_tmp.is_file():
         try:
             meta = json.loads(meta_tmp.read_text(encoding="utf-8"))
         except Exception:
@@ -337,20 +297,9 @@ def dataset_meta(model_name: str) -> dict:
 
 def load_dataset_csv(model_name: str) -> tuple[str | None, dict]:
     """Return (csv_text, meta). csv_text is None when nothing is saved."""
-    csv_key, _meta_key = dataset_keys(model_name)
     csv_tmp, _meta_tmp = _dataset_tmp_paths(model_name)
-    bucket = _bucket()
     text = None
-    if bucket:
-        try:
-            import boto3
-
-            obj = boto3.client("s3").get_object(Bucket=bucket, Key=csv_key)
-            text = obj["Body"].read().decode("utf-8", "replace")
-        except Exception as e:
-            if "NoSuchKey" not in str(e) and "404" not in str(e) and "Not Found" not in str(e):
-                pass
-    if text is None and csv_tmp.is_file():
+    if csv_tmp.is_file():
         text = csv_tmp.read_text(encoding="utf-8", errors="replace")
     meta = dataset_meta(model_name)
     if text is None:
@@ -383,161 +332,19 @@ def save_dataset_csv(model_name: str, csv_text: str, filename: str = "dataset.cs
         "rows": rows,
         "uploaded_at": _now(),
     }
-    csv_key, meta_key = dataset_keys(model_name)
     csv_tmp, meta_tmp = _dataset_tmp_paths(model_name)
     csv_tmp.write_bytes(raw)
     meta_tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    bucket = _bucket()
-    if bucket:
-        import boto3
-
-        s3 = boto3.client("s3")
-        s3.put_object(Bucket=bucket, Key=csv_key, Body=raw, ContentType="text/csv; charset=utf-8")
-        s3.put_object(
-            Bucket=bucket, Key=meta_key,
-            Body=json.dumps(meta, indent=2).encode("utf-8"),
-            ContentType="application/json",
-        )
     return {"present": True, **meta}
 
 
 def save_store(model_name: str, store: dict) -> None:
-    """
-    Write lab json to /tmp always, and to S3 when LAB_STORE_BUCKET is set.
-
-    Concurrent Lambda invocations (a webhook retry landing while the dashboard
-    writes) used to clobber each other last-writer-wins, silently dropping
-    decisions and paper-account updates. The S3 write is now a compare-and-swap
-    against the ETag the store was read with: on a conflict we re-read, replay
-    this invocation's appends onto the newer store, and retry.
-    """
+    """Write the lab JSON atomically (tmp file + replace)."""
     store["updated_at"] = _now()
-    bucket = _bucket()
-    if not bucket:
-        TMP_PATH.write_text(json.dumps(store, indent=2), encoding="utf-8")
-        return
-
-    import boto3
-
-    s3 = boto3.client("s3")
-    key = _key(model_name)
-    expected = store.pop("_etag", None)
-
-    for attempt in range(_SAVE_MAX_ATTEMPTS):
-        raw = json.dumps(store, indent=2)
-        kwargs = {
-            "Bucket": bucket,
-            "Key": key,
-            "Body": raw.encode("utf-8"),
-            "ContentType": "application/json",
-        }
-        # If-Match makes the PUT fail rather than overwrite a newer version.
-        # IfNoneMatch="*" is the first-write case (object must not exist yet).
-        if expected:
-            kwargs["IfMatch"] = expected
-        try:
-            resp = s3.put_object(**kwargs)
-            store["_etag"] = (resp.get("ETag") or "").strip('"') or None
-            TMP_PATH.write_text(raw, encoding="utf-8")
-            return
-        except Exception as e:
-            msg = str(e)
-            conflict = (
-                "PreconditionFailed" in msg
-                or "ConditionalRequestConflict" in msg
-                or "412" in msg
-                or "409" in msg
-            )
-            # A bucket or SDK without conditional-write support must still save.
-            unsupported = "NotImplemented" in msg or "InvalidArgument" in msg
-            if unsupported:
-                s3.put_object(
-                    Bucket=bucket, Key=key,
-                    Body=raw.encode("utf-8"), ContentType="application/json",
-                )
-                TMP_PATH.write_text(raw, encoding="utf-8")
-                return
-            if not conflict or attempt == _SAVE_MAX_ATTEMPTS - 1:
-                # Last resort: never lose the write entirely.
-                s3.put_object(
-                    Bucket=bucket, Key=key,
-                    Body=raw.encode("utf-8"), ContentType="application/json",
-                )
-                TMP_PATH.write_text(raw, encoding="utf-8")
-                return
-            # Someone else wrote first. Rebase our appends onto their store.
-            fresh, expected = _read_store_with_etag(model_name)
-            if fresh is None:
-                expected = None
-                continue
-            store = _merge_store(fresh, store)
-            store["updated_at"] = _now()
-
-
-_SAVE_MAX_ATTEMPTS = 4
-
-
-def _read_store_with_etag(model_name: str):
-    """Return (store, etag) from S3, or (None, None) when unreadable."""
-    bucket = _bucket()
-    if not bucket:
-        return None, None
-    try:
-        import boto3
-
-        obj = boto3.client("s3").get_object(Bucket=bucket, Key=_key(model_name))
-        raw = obj["Body"].read().decode("utf-8")
-        etag = (obj.get("ETag") or "").strip('"') or None
-        return ensure_store_shape(json.loads(raw), model_name), etag
-    except Exception:
-        return None, None
-
-
-_APPEND_LISTS = ("decisions", "errors")
-
-
-def _merge_store(base: dict, mine: dict) -> dict:
-    """
-    Rebase this invocation's changes onto a store someone else just wrote.
-
-    Append-only logs are unioned by id so neither writer's rows are lost.
-    Config and account state take this invocation's value, because a paper
-    account is only ever advanced by the ingest that is holding it.
-    """
-    merged = dict(base)
-    for name in _APPEND_LISTS:
-        theirs = list(base.get(name) or [])
-        ours = list(mine.get(name) or [])
-        seen = set()
-        out = []
-        for row in theirs + ours:
-            rid = row.get("id") or row.get("decision_id") or row.get("error_id")
-            marker = rid if rid is not None else json.dumps(row, sort_keys=True, default=str)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            out.append(row)
-        merged[name] = out[-MAX_DECISIONS:] if name == "decisions" else out[-MAX_ERRORS:]
-    for name in ("feeds", "profiles", "accounts", "sheet_webhook", "metrics"):
-        if name in mine:
-            merged[name] = mine[name]
-    # Heartbeats are frequent and can race with an ingest/config write. Keep
-    # the newest broker snapshot instead of allowing a stale rebase to erase it.
-    base_broker = base.get("broker_live")
-    mine_broker = mine.get("broker_live")
-    if base_broker is not None or mine_broker is not None:
-        base_stamp = str(
-            (base_broker or {}).get("updated_at")
-            or (base_broker or {}).get("last_heartbeat_at")
-            or ""
-        )
-        mine_stamp = str(
-            (mine_broker or {}).get("updated_at")
-            or (mine_broker or {}).get("last_heartbeat_at")
-            or ""
-        )
-        merged["broker_live"] = mine_broker if mine_stamp >= base_stamp else base_broker
-    return merged
+    store.pop("_etag", None)
+    tmp = TMP_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    os.replace(tmp, TMP_PATH)
 
 
 def ensure_account(store: dict, profile: dict) -> dict:
@@ -1093,7 +900,7 @@ def metrics_summary(store: dict) -> dict:
     summary["feeds_count"] = len(store.get("feeds") or [])
     summary["profiles_count"] = len(store.get("profiles") or [])
     summary["store_updated_at"] = store.get("updated_at")
-    summary["persistence"] = "s3" if _bucket() else "tmp"
+    summary["persistence"] = "file"
     return summary
 
 
@@ -1784,22 +1591,7 @@ def push_rows_to_webhooks(store: dict, rows: list[dict]) -> list[dict]:
 
 
 def load_store(model_name: str) -> dict:
-    """Read lab json from S3 (or /tmp). Creates a default store on first run."""
-    bucket = _bucket()
-    if bucket:
-        try:
-            import boto3
-
-            obj = boto3.client("s3").get_object(Bucket=bucket, Key=_key(model_name))
-            store = json.loads(obj["Body"].read().decode("utf-8"))
-            store = ensure_store_shape(store, model_name)
-            # Remembered so save_store can compare-and-swap against exactly the
-            # version this invocation read.
-            store["_etag"] = (obj.get("ETag") or "").strip('"') or None
-            return store
-        except Exception as e:
-            if "NoSuchKey" not in str(e) and "404" not in str(e) and "Not Found" not in str(e):
-                pass
+    """Read the lab JSON; a default store on first run or on a corrupt file."""
     if TMP_PATH.is_file():
         try:
             return ensure_store_shape(json.loads(TMP_PATH.read_text(encoding="utf-8")), model_name)

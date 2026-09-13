@@ -2,13 +2,11 @@
 
 | Doc | Purpose |
 |---|---|
-| [GITOPS_LAYER_KNOWLEDGE.md](GITOPS_LAYER_KNOWLEDGE.md) | Full layer map L0–L12, APIs, env, logs, rollback |
+| [TRADING_RULES.md](TRADING_RULES.md) | The live rules, configuration precedence, lessons kept |
+| [GITOPS_LAYER_KNOWLEDGE.md](GITOPS_LAYER_KNOWLEDGE.md) | Layer map L0-L10, APIs, env, logs |
+| [Ali PC Deployment/START_HERE.md](Ali%20PC%20Deployment/START_HERE.md) | Install / start the Ali PC stack |
+| [Ali PC Deployment/CONNECT_LIVE.md](Ali%20PC%20Deployment/CONNECT_LIVE.md) | PC -> desk link checklist, logs, how updates flow |
 | [Ali PC Deployment/ALI_PC_MASTER_SETUP_PROMPT.md](Ali%20PC%20Deployment/ALI_PC_MASTER_SETUP_PROMPT.md) | Copy-paste master prompt to set up / verify Ali PC |
 | [Ali PC Deployment/ALI_AWAY_RUNBOOK.md](Ali%20PC%20Deployment/ALI_AWAY_RUNBOOK.md) | Away one-liner |
-| [Google Console Deployment/ALI_PUSH_AUTO_DEPLOY.md](Google%20Console%20Deployment/ALI_PUSH_AUTO_DEPLOY.md) | Ali push → GCP (legacy Ali-only watcher) |
-| [ROLLBACK/README.txt](ROLLBACK/README.txt) | Pin good SHAs / rollback |
-| [ROLLBACK/COMMIT_STYLE.txt](ROLLBACK/COMMIT_STYLE.txt) | Commit message style |
 
-Unified desk auto-deploy (Hamza **or** Ali push → GCP):  
-`Google Console Deployment/watch_latest_desk_deploy.ps1`  
-Task: `OnyxionLatest-DeskDeployWatch`
+Desk auto-deploy (Hamza **or** Ali push -> GCP): `Google Console Deployment/watch_latest_desk_deploy.ps1`, task `OnyxionLatest-DeskDeployWatch` on the office PC.

@@ -1,9 +1,16 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
-  Pull latest bridge bundle every 15 minutes (Windows Scheduled Task).
-  Reads BRIDGE_UPDATE_URL from C:\onyxion-{profile}\.env (or git pull).
+  Candle-safe bridge update from the Latest_Gold_Trading_Bot clone.
 
-  On change: backup → copy Python + scripts → restart watchdog (MT5 stays open).
+  Called by github_update_agent.py (with -Force -SkipCandleWait after it has
+  already waited for the M15 close and written the deploy-skip marker) or by
+  hand:  auto_update_bridge.ps1 -Profile ali -Root C:\onyxion-ali -Force
+
+  Steps: git pull --ff-only -> fingerprint compare -> safety gate ->
+  backup -> (wait for M15 close + write state\deploy_skip_bar.json) ->
+  copy runtime + scripts + mq5 -> restart watchdog + bridge.
+  Never touches .env or state\ and never flattens open positions: the skip
+  marker only suppresses NEW entries on the first candle after the restart.
 #>
 [CmdletBinding()]
 param(
@@ -20,18 +27,14 @@ $logDir = Join-Path $Root "logs"
 $backupDir = Join-Path $Root "backup"
 $logFile = Join-Path $logDir "auto_update.log"
 $historyFile = Join-Path $logDir "update_history.log"
-$changelogFile = Join-Path $Root "CHANGELOG.md"
+# Files copied flat from "Ali PC Deployment\runtime" into the install root.
 $trackFiles = @(
-  "bridge_trader.py",
-  "mt5_live_engine.py",
-  "watchdog_exness.py",
-  "healthcheck_mt5.py",
-  "connection_monitor.py",
-  "github_update_agent.py",
-  "safety_gate_check.py",
-  "requirements.txt",
-  "VERSION.json"
+  "bridge_trader.py", "mt5_live_engine.py", "watchdog_exness.py", "healthcheck_mt5.py",
+  "connection_monitor.py", "github_update_agent.py", "safety_gate_check.py",
+  "requirements.txt", "VERSION.json"
 )
+# A change to any of these needs the running bridge restarted.
+$restartOn = "bridge_trader|mt5_live_engine|watchdog|connection_monitor|github_update_agent"
 
 New-Item -ItemType Directory -Force -Path $logDir, $backupDir, (Join-Path $Root "scripts") | Out-Null
 
@@ -44,46 +47,6 @@ function Write-Log($msg) {
 function Write-History($msg) {
   $line = "{0} {1}" -f (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss UTC"), $msg
   Add-Content -Path $historyFile -Value $line -Encoding UTF8
-}
-
-function Ensure-ChangelogHeader {
-  if (Test-Path $changelogFile) { return }
-  $header = @"
-# Onyxion Bridge — Local Update Changelog ($Profile)
-
-Machine-local audit trail: every bundle check and every applied update from GCP.
-Dev publishes via ``publish_to_gcp.ps1``; this file is written by ``auto_update_bridge.ps1``.
-
-| Field | Location |
-|-------|----------|
-| Routine log | ``logs\auto_update.log`` |
-| One-line history | ``logs\update_history.log`` |
-| This file | ``CHANGELOG.md`` (human-readable) |
-
----
-
-"@
-  Set-Content -Path $changelogFile -Value $header -Encoding UTF8
-}
-
-function Write-Changelog {
-  param(
-    [string]$Action,
-    [string]$Version = "unknown",
-    [string]$Detail = ""
-  )
-  Ensure-ChangelogHeader
-  $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss UTC")
-  $entry = @"
-
-## $ts — $Action
-
-- profile: **$Profile**
-- version: ``$Version``
-$Detail
-
-"@
-  Add-Content -Path $changelogFile -Value $entry -Encoding UTF8
 }
 
 function Read-EnvValue($name) {
@@ -109,157 +72,61 @@ function Get-BundleFingerprint($dir) {
   return ($parts -join "|")
 }
 
-function Find-BundleRoot($dir) {
-  if (Test-Path (Join-Path $dir "bridge_trader.py")) { return $dir }
-  foreach ($child in Get-ChildItem $dir -Directory -ErrorAction SilentlyContinue) {
-    $hit = Find-BundleRoot $child.FullName
-    if ($hit) { return $hit }
-  }
-  return $null
-}
-
-function Test-LabInsecureTls() {
-  $v = Read-EnvValue "ASIM_LAB_INSECURE"
-  if ($null -eq $v -or [string]::IsNullOrWhiteSpace($v)) { return $true }
-  return $v.Trim().ToLower() -notin @("0", "false", "no")
-}
-
-function Invoke-LabWebRequest {
-  param([string]$Uri, [string]$OutFile)
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
-  if ($curl -and (Test-LabInsecureTls)) {
-    Write-Log "download via curl.exe (GCP TLS renegotiation workaround)"
-    & curl.exe -k -s -L --connect-timeout 60 --max-time 300 -o $OutFile $Uri
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -lt 100) {
-      throw "curl download failed exit=$LASTEXITCODE"
-    }
-    return
-  }
-  if (Test-LabInsecureTls) {
-    Write-Log "download (ASIM_LAB_INSECURE=1, skip cert verify for GCP self-signed)"
-    $prev = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
-    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-    try {
-      Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
-    } finally {
-      [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prev
-    }
-  } else {
-    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
-  }
-}
-
 function Stop-WatchdogForRoot($rootPath) {
-  $escaped = [regex]::Escape($rootPath)
+  # Plain wildcard match. The previous version ran the root through
+  # [regex]::Escape and then used -like, so "C:\\onyxion-ali" never matched
+  # "C:\onyxion-ali": no process was ever stopped and every "restart" was a
+  # no-op that left the old code running.
   Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
     Where-Object {
-      $_.CommandLine -and (
-        ($_.CommandLine -like "*watchdog_exness.py*" -and $_.CommandLine -like "*$escaped*") -or
-        ($_.CommandLine -like "*bridge_trader.py*" -and $_.CommandLine -like "*$escaped*")
-      )
+      $_.CommandLine -and ($_.CommandLine -like "*$rootPath*") -and
+      ($_.CommandLine -like "*watchdog_exness.py*" -or $_.CommandLine -like "*bridge_trader.py*")
     } |
     ForEach-Object {
       Write-Log "stop pid=$($_.ProcessId) $($_.CommandLine.Substring(0, [Math]::Min(120, $_.CommandLine.Length)))"
       Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
-  Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 3
 }
 
 function Start-WatchdogForProfile($profileName, $rootPath) {
+  $repair = Join-Path $rootPath "fix_script_encoding.ps1"
+  if (Test-Path $repair) { & $repair -Root $rootPath | Out-Null }
   $starter = Join-Path $rootPath "scripts\start_bridge_stack.ps1"
-  if (-not (Test-Path $starter)) {
-    $starter = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "start_bridge_stack.ps1"
-  }
-  if (Test-Path $starter) {
-    & $starter -Profile $profileName -Root $rootPath
-  } else {
-    throw "start_bridge_stack.ps1 not found"
-  }
+  if (-not (Test-Path $starter)) { throw "start_bridge_stack.ps1 not found under $rootPath\scripts" }
+  & $starter -Profile $profileName -Root $rootPath
 }
 
 function Get-UtcM15Open([DateTime]$utcNow) {
   $minute = [Math]::Floor($utcNow.Minute / 15) * 15
-  return [DateTime]::SpecifyKind(
-    (New-Object DateTime($utcNow.Year, $utcNow.Month, $utcNow.Day, $utcNow.Hour, $minute, 0)),
-    [DateTimeKind]::Utc
-  )
+  return [DateTime]::SpecifyKind((New-Object DateTime($utcNow.Year, $utcNow.Month, $utcNow.Day, $utcNow.Hour, $minute, 0)), [DateTimeKind]::Utc)
 }
 
 function Wait-ForCurrentM15Close {
-  # Wait until the forming M15 UTC candle closes, then return the NEXT bar open
-  # (that next bar is the one we skip for new entries after restart).
   $now = [DateTime]::UtcNow
   $currentOpen = Get-UtcM15Open $now
   $closeAt = $currentOpen.AddMinutes(15)
-  $skipBar = $closeAt
   $waitSec = [Math]::Ceiling(($closeAt - [DateTime]::UtcNow).TotalSeconds) + 3
-  if ($waitSec -lt 0) { $waitSec = 3 }
+  if ($waitSec -lt 3) { $waitSec = 3 }
   if ($waitSec -gt 960) { $waitSec = 960 }
-  Write-Log ("waiting for M15 close bar_open={0:yyyy-MM-ddTHH:mm:ss}Z skip_next={1:yyyy-MM-ddTHH:mm:ss}Z wait_sec={2}" -f $currentOpen, $skipBar, $waitSec)
+  Write-Log ("waiting for M15 close bar_open={0:yyyy-MM-ddTHH:mm:ss}Z skip_next={1:yyyy-MM-ddTHH:mm:ss}Z wait_sec={2}" -f $currentOpen, $closeAt, $waitSec)
   Start-Sleep -Seconds $waitSec
   return @{
     WaitedCloseBar = ($currentOpen.ToString("yyyy-MM-ddTHH:mm:ss") + "Z")
-    SkipBarTime    = ($skipBar.ToString("yyyy-MM-ddTHH:mm:ss") + "Z")
+    SkipBarTime    = ($closeAt.ToString("yyyy-MM-ddTHH:mm:ss") + "Z")
   }
 }
 
-function Write-DeploySkipMarker {
-  param(
-    [string]$RootPath,
-    [string]$SkipBarTime,
-    [string]$WaitedCloseBar,
-    [string]$Version
-  )
+function Write-DeploySkipMarker([string]$RootPath, [string]$SkipBarTime, [string]$WaitedCloseBar, [string]$Version) {
   $stateDir = Join-Path $RootPath "state"
   New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
   $marker = Join-Path $stateDir "deploy_skip_bar.json"
-  $payload = @{
-    skip_bar_time       = $SkipBarTime
-    waited_close_bar    = $WaitedCloseBar
-    version             = $Version
-    reason              = "auto_update_skip_next_bar"
-    no_flatten          = $true
-    preserve_positions  = $true
-    preserve_sl         = $true
-    written_at          = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-  } | ConvertTo-Json -Depth 4
-  Set-Content -Path $marker -Value $payload -Encoding UTF8
-  Write-Log "wrote deploy skip marker $marker skip=$SkipBarTime (entries only; no flatten)"
-}
-
-function Copy-FromGitHubLayout {
-  param([string]$GitDir, [string]$StagingDir)
-  # Corp repo layout: Ali PC Deployment/runtime/*.py
-  $runtime = Join-Path $GitDir "Ali PC Deployment\runtime"
-  $scripts = Join-Path $GitDir "Ali PC Deployment\scripts"
-  $mq5 = Join-Path $GitDir "Ali PC Deployment\mq5"
-  if (Test-Path (Join-Path $runtime "bridge_trader.py")) {
-    foreach ($name in $trackFiles) {
-      $src = Join-Path $runtime $name
-      if (Test-Path $src) { Copy-Item $src (Join-Path $StagingDir $name) -Force }
-    }
-    if (Test-Path $scripts) {
-      Copy-Item $scripts (Join-Path $StagingDir "scripts") -Recurse -Force
-    }
-    if (Test-Path $mq5) {
-      Copy-Item $mq5 (Join-Path $StagingDir "mq5") -Recurse -Force
-    }
-    return $true
-  }
-  # Flat layout: bridge_trader.py at git root
-  if (Test-Path (Join-Path $GitDir "bridge_trader.py")) {
-    foreach ($name in $trackFiles) {
-      $src = Join-Path $GitDir $name
-      if (Test-Path $src) { Copy-Item $src (Join-Path $StagingDir $name) -Force }
-    }
-    $scriptsSrc = Join-Path $GitDir "scripts"
-    if (Test-Path $scriptsSrc) {
-      Copy-Item $scriptsSrc (Join-Path $StagingDir "scripts") -Recurse -Force
-    }
-    return $true
-  }
-  return $false
+  @{
+    skip_bar_time = $SkipBarTime; waited_close_bar = $WaitedCloseBar; version = $Version
+    reason = "auto_update_skip_next_bar"; no_flatten = $true; preserve_positions = $true; preserve_sl = $true
+    written_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+  } | ConvertTo-Json -Depth 4 | Set-Content -Path $marker -Encoding UTF8
+  Write-Log "wrote deploy skip marker skip=$SkipBarTime (entries only; no flatten)"
 }
 
 function Invoke-SafetyGate([string]$CheckRoot) {
@@ -271,15 +138,9 @@ function Invoke-SafetyGate([string]$CheckRoot) {
   Write-Log "safety_gate check root=$CheckRoot"
   & powershell -NoProfile -ExecutionPolicy Bypass -File $gatePs1 -Root $CheckRoot -NoDashboard
   if ($LASTEXITCODE -ne 0) {
-    Write-Log "ERROR: safety_gate FAILED — refusing to copy live runtime"
-    $resultPath = Join-Path $Root "state\last_update_result.json"
-    New-Item -ItemType Directory -Force -Path (Split-Path $resultPath) | Out-Null
-    @{
-      ok = $false
-      reason = "safety_gate_failed"
-      checked_root = $CheckRoot
-      utc = (Get-Date).ToUniversalTime().ToString("o")
-    } | ConvertTo-Json -Depth 4 | Set-Content $resultPath -Encoding UTF8
+    Write-Log "ERROR: safety_gate FAILED - refusing to copy live runtime"
+    @{ ok = $false; reason = "safety_gate_failed"; checked_root = $CheckRoot; utc = (Get-Date).ToUniversalTime().ToString("o") } |
+      ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Root "state\last_update_result.json") -Encoding UTF8
     return $false
   }
   Write-Log "safety_gate PASS"
@@ -288,97 +149,51 @@ function Invoke-SafetyGate([string]$CheckRoot) {
 
 Write-Log "auto_update start profile=$Profile root=$Root force=$Force skipWait=$SkipCandleWait"
 
-$updateUrl = Read-EnvValue "BRIDGE_UPDATE_URL"
 $gitDir = Read-EnvValue "BRIDGE_UPDATE_GIT"
 $gitRemote = Read-EnvValue "BRIDGE_UPDATE_GIT_REMOTE"
-# Prefer git path when both are set (Latest is source of truth).
-if (-not $gitDir) {
-  $gitDir = "C:\onyxion-src\Latest_Gold_Trading_Bot"
+if (-not $gitDir) { $gitDir = "C:\onyxion-src\Latest_Gold_Trading_Bot" }
+if (-not $gitRemote) { $gitRemote = "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot.git" }
+if (-not (Test-Path (Join-Path $gitDir ".git"))) {
+  Write-Log "ERROR: no git clone at $gitDir - clone Latest_Gold_Trading_Bot there first"
+  exit 1
 }
-$staging = Join-Path $env:TEMP ("onyxion-update-" + [guid]::NewGuid().ToString("n"))
-New-Item -ItemType Directory -Force -Path $staging | Out-Null
+$pack = Join-Path $gitDir "Ali PC Deployment"
+$runtime = Join-Path $pack "runtime"
 
 try {
-  if ($gitDir -and (Test-Path (Join-Path $gitDir ".git"))) {
-    Push-Location $gitDir
-    if ($gitRemote) { git remote set-url origin $gitRemote 2>$null }
-    elseif (-not $gitRemote) {
-      $gitRemote = "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot.git"
-      git remote set-url origin $gitRemote 2>$null
-    }
-    git pull --ff-only 2>&1 | ForEach-Object { Write-Log "git: $_" }
-    Pop-Location
-    if (-not (Copy-FromGitHubLayout -GitDir $gitDir -StagingDir $staging)) {
-      Write-Log "ERROR: git dir has no bridge_trader.py (flat or Ali PC Deployment/runtime)"
-      exit 1
-    }
-  } elseif ($updateUrl) {
-    $zipPath = Join-Path $env:TEMP "onyxion-bridge-bundle.zip"
-    Write-Log "download $updateUrl"
-    Invoke-LabWebRequest -Uri $updateUrl -OutFile $zipPath
-    $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-    Expand-Archive -Path $zipPath -DestinationPath $staging -Force
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    $bundleVersion = "unknown"
-    $verStaging = Join-Path $staging "VERSION.json"
-    if (-not (Test-Path $verStaging)) {
-      $br = Find-BundleRoot $staging
-      if ($br) { $verStaging = Join-Path $br "VERSION.json" }
-    }
-    if (Test-Path $verStaging) {
-      try {
-        $vo = Get-Content $verStaging -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($vo.version) { $bundleVersion = [string]$vo.version }
-      } catch { }
-    }
-    Write-Changelog -Action "RECEIVED" -Version $bundleVersion -Detail ("- source: ``{0}``" -f $updateUrl)
-    Write-Changelog -Action "RECEIVED_HASH" -Version $bundleVersion -Detail ("- zip_sha256: ``{0}``" -f $zipHash)
-  } else {
-    Write-Log "SKIP: set BRIDGE_UPDATE_URL or BRIDGE_UPDATE_GIT in $Root\.env"
-    exit 0
-  }
-
-  $bundleRoot = Find-BundleRoot $staging
-  if (-not $bundleRoot) {
-    Write-Log "ERROR: bundle missing bridge_trader.py"
+  Push-Location $gitDir
+  git remote set-url origin $gitRemote 2>$null
+  git pull --ff-only 2>&1 | ForEach-Object { Write-Log "git: $_" }
+  $sha = (git rev-parse --short HEAD 2>$null)
+  Pop-Location
+  if (-not (Test-Path (Join-Path $runtime "bridge_trader.py"))) {
+    Write-Log "ERROR: $runtime has no bridge_trader.py"
     exit 1
   }
 
-  $newFp = Get-BundleFingerprint $bundleRoot
+  $newFp = Get-BundleFingerprint $runtime
   $oldFp = Get-BundleFingerprint $Root
   $incomingVersion = "unknown"
-  $verIncoming = Join-Path $bundleRoot "VERSION.json"
-  if (Test-Path $verIncoming) {
-    try {
-      $vo = Get-Content $verIncoming -Raw -Encoding UTF8 | ConvertFrom-Json
-      if ($vo.version) { $incomingVersion = [string]$vo.version }
-    } catch { }
-  }
+  try {
+    $vo = Get-Content (Join-Path $runtime "VERSION.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($vo.version) { $incomingVersion = [string]$vo.version }
+  } catch { }
 
   if (-not $Force -and $newFp -and $oldFp -and $newFp -eq $oldFp) {
-    Write-Log "no change (fingerprint match)"
-    Write-Changelog -Action "NO_CHANGE" -Version $incomingVersion -Detail "- fingerprint unchanged; local files already match bundle"
+    Write-Log "no change (fingerprint match) sha=$sha"
     exit 0
   }
+  if (-not (Invoke-SafetyGate -CheckRoot $gitDir)) { exit 2 }
 
-  if (-not (Invoke-SafetyGate -CheckRoot $bundleRoot)) {
-    Write-Changelog -Action "BLOCKED_SAFETY_GATE" -Version $incomingVersion -Detail "- refused apply; live runtime unchanged"
-    exit 2
-  }
-
-  Write-Log "update detected - candle-safe apply (preserve state/ and open positions; never flatten)"
+  Write-Log "update detected sha=$sha version=$incomingVersion - candle-safe apply (state/ and .env preserved; never flattens)"
   foreach ($name in $trackFiles) {
     $src = Join-Path $Root $name
     if (Test-Path $src) { Copy-Item $src (Join-Path $backupDir $name) -Force }
   }
 
-  $version = $incomingVersion
   if ($SkipCandleWait) {
+    $timing = @{ WaitedCloseBar = ""; SkipBarTime = "" }
     $skipPath = Join-Path $Root "state\deploy_skip_bar.json"
-    $timing = @{
-      WaitedCloseBar = ""
-      SkipBarTime    = ""
-    }
     if (Test-Path $skipPath) {
       try {
         $m = Get-Content $skipPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -389,78 +204,56 @@ try {
     Write-Log "SkipCandleWait=1 using existing skip marker skip=$($timing.SkipBarTime)"
   } else {
     $timing = Wait-ForCurrentM15Close
-    Write-DeploySkipMarker -RootPath $Root -SkipBarTime $timing.SkipBarTime -WaitedCloseBar $timing.WaitedCloseBar -Version $version
+    Write-DeploySkipMarker -RootPath $Root -SkipBarTime $timing.SkipBarTime -WaitedCloseBar $timing.WaitedCloseBar -Version $incomingVersion
   }
 
   $restart = $false
-  $copiedFiles = @()
+  $copied = @()
+  $stamp = Get-Date
   foreach ($name in $trackFiles) {
-    $from = Join-Path $bundleRoot $name
+    $from = Join-Path $runtime $name
     if (-not (Test-Path $from)) { continue }
     $to = Join-Path $Root $name
-    if ((Test-Path $to) -and $name -match "bridge_trader|mt5_live_engine|watchdog|connection_monitor|github_update_agent") {
-      $oldH = (Get-FileHash $to -Algorithm SHA256).Hash
-      $newH = (Get-FileHash $from -Algorithm SHA256).Hash
-      if ($oldH -ne $newH) { $restart = $true }
+    if ((Test-Path $to) -and $name -match $restartOn) {
+      if ((Get-FileHash $to -Algorithm SHA256).Hash -ne (Get-FileHash $from -Algorithm SHA256).Hash) { $restart = $true }
     }
     Copy-Item $from $to -Force
-    $copiedFiles += $name
-    Write-Log "copied $name"
+    # Copy-Item keeps the source mtime (the git checkout time). The connection
+    # monitor's stale-code check compares file mtime with the bridge's start
+    # time, so stamp "now" or an update pulled hours ago looks already loaded.
+    (Get-Item $to).LastWriteTime = $stamp
+    $copied += $name
   }
-
-  $scriptsFrom = Join-Path $bundleRoot "scripts"
-  if (Test-Path $scriptsFrom) {
-    Copy-Item "$scriptsFrom\*" (Join-Path $Root "scripts") -Recurse -Force
-    $copiedFiles += "scripts/*"
-    Write-Log "synced scripts/"
-    $restart = $true
+  Copy-Item (Join-Path $pack "scripts\*") (Join-Path $Root "scripts") -Recurse -Force
+  $copied += "scripts/*"
+  foreach ($extra in @("fix_script_encoding.ps1", "START_BOT.bat", "CHECK_BOT.bat", "STOP_BOT.bat")) {
+    $p = Join-Path $pack $extra
+    if (Test-Path $p) { Copy-Item $p (Join-Path $Root $extra) -Force }
   }
-
-  $mq5From = Join-Path $bundleRoot "mq5"
-  if (Test-Path $mq5From) {
-    Copy-Item "$mq5From\*" (Join-Path $Root "mq5") -Recurse -Force
-    $copiedFiles += "mq5/*"
-    Write-Log "synced mq5/ (recompile in MetaEditor if indicators changed)"
+  if (Test-Path (Join-Path $pack "mq5")) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $Root "mq5") | Out-Null
+    Copy-Item (Join-Path $pack "mq5\*") (Join-Path $Root "mq5") -Recurse -Force
+    $copied += "mq5/*"
   }
-
-  # NEVER touch .env or state/ (engine memory, open tickets, SL levels).
-  Write-Log "preserved $Root\state and $Root\.env (no flatten on update)"
+  Write-Log "copied: $($copied -join ', ') (state/ and .env untouched)"
 
   if ($restart) {
     Write-Log "restarting bridge stack (positions stay open on MT5)"
     Stop-WatchdogForRoot $Root
     Start-WatchdogForProfile $Profile $Root
+  } else {
+    Write-Log "runtime unchanged - no restart needed"
   }
 
   $restartFlag = if ($restart) { "yes" } else { "no" }
-  Write-Log "update complete restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime)"
-  Write-History "version=$version restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime) fingerprint=$newFp files=$($copiedFiles -join ', ')"
-  $resultPath = Join-Path $Root "state\last_update_result.json"
-  New-Item -ItemType Directory -Force -Path (Split-Path $resultPath) | Out-Null
+  Write-Log "update complete sha=$sha restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime)"
+  Write-History "sha=$sha version=$incomingVersion restart=$restartFlag waited_close=$($timing.WaitedCloseBar) skip_bar=$($timing.SkipBarTime) files=$($copied -join ', ')"
   @{
-    ok = $true
-    version = $version
-    restart = $restart
-    waited_close_bar = $timing.WaitedCloseBar
-    skip_bar_time = $timing.SkipBarTime
-    fingerprint = $newFp
-    files = $copiedFiles
-    utc = (Get-Date).ToUniversalTime().ToString("o")
-  } | ConvertTo-Json -Depth 5 | Set-Content $resultPath -Encoding UTF8
-  $detailLines = @(
-    "- files updated: $($copiedFiles -join ', ')",
-    "- bridge restart: **$restartFlag**",
-    "- waited for close of: ``$($timing.WaitedCloseBar)``",
-    "- skipped entry candle: ``$($timing.SkipBarTime)``",
-    "- open positions / SL / engine state: **preserved** (no flatten)",
-    "- new fingerprint: ``$newFp``"
-  )
-  if ($Force) { $detailLines += "- note: forced update (-Force)" }
-  Write-Changelog -Action "APPLIED_CANDLE_SAFE" -Version $version -Detail ($detailLines -join "`n")
+    ok = $true; sha = $sha; version = $incomingVersion; restart = $restart
+    waited_close_bar = $timing.WaitedCloseBar; skip_bar_time = $timing.SkipBarTime
+    fingerprint = $newFp; files = $copied; utc = (Get-Date).ToUniversalTime().ToString("o")
+  } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $Root "state\last_update_result.json") -Encoding UTF8
 } catch {
   Write-Log "ERROR: $($_.Exception.Message)"
-  Write-Changelog -Action "ERROR" -Version "unknown" -Detail ("- error: ``{0}``" -f $_.Exception.Message)
   exit 1
-} finally {
-  if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }
 }
