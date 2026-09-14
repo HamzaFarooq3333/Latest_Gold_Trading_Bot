@@ -328,6 +328,60 @@ def ensure_bridge_stack() -> None:
         log_err("ensure_bridge_stack", exc)
 
 
+def _github_agent_running() -> bool:
+    """True if github_update_agent.py is alive under this ROOT."""
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' OR Name='python.exe'\" "
+                "| Where-Object { $_.CommandLine -match 'github_update_agent' } "
+                "| Select-Object -First 1 -ExpandProperty ProcessId",
+            ],
+            text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return bool((out or "").strip())
+    except Exception:
+        return False
+
+
+def ensure_github_agent() -> None:
+    """Keep the GitOps agent alive so the desk Ali PC panel stays online.
+
+    The trading bridge can be healthy while the agent is dead — then the desk
+    shows AGENT OFFLINE and queued force_check/restart commands never run.
+    """
+    if _github_agent_running():
+        return
+    try:
+        subprocess.run(
+            ["schtasks", "/Run", "/TN", "OnyxionAli-GitHubAgent"],
+            text=True, capture_output=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        log_conn("GITHUB_AGENT", "scheduled task OnyxionAli-GitHubAgent started")
+        return
+    except Exception as exc:
+        log_err("ensure_github_agent_task", exc)
+    pyw = ROOT / "venv" / "Scripts" / "pythonw.exe"
+    agent = ROOT / "github_update_agent.py"
+    if not agent.exists() and (ROOT / "runtime" / "github_update_agent.py").exists():
+        agent = ROOT / "runtime" / "github_update_agent.py"
+    if not pyw.exists() or not agent.exists():
+        log_conn("GITHUB_AGENT", f"cannot start — missing pyw={pyw.exists()} agent={agent.exists()}")
+        return
+    try:
+        subprocess.Popen(
+            [str(pyw), str(agent)],
+            cwd=str(ROOT),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        log_conn("GITHUB_AGENT", f"started directly {agent}")
+    except Exception as exc:
+        log_err("ensure_github_agent_direct", exc)
+
+
 def main() -> int:
     acquire_lock()
     env = load_env()
@@ -384,6 +438,7 @@ def main() -> int:
                     consecutive_failures = 0
 
             ensure_bridge_stack()
+            ensure_github_agent()
 
             # New code on disk that the running bridge never loaded is a silent
             # failure: heartbeats keep flowing and every health check passes
