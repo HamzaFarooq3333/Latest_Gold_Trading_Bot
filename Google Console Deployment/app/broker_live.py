@@ -54,7 +54,7 @@ def _default_controls() -> dict:
     surfaces values nobody configured."""
     return {
         "VOLUME": _env_number("VOLUME", 0.02),
-        "HIST_THRESH": _env_number("HIST_THRESH", 15),
+        "HIST_THRESH": _env_number("HIST_THRESH", 10),
         "ENTRY_EVERY_CANDLE": _env_number("ENTRY_EVERY_CANDLE", 1),
         "TSL_ATR_MULT": _env_number("TSL_ATR_MULT", 1.25),
         "TSL_TICKS": _env_number("TSL_TICKS", 1111),

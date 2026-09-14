@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mt5_live_engine as eng  # noqa: E402
 
 LIVE_ENV = {
-    "ENTRY_EVERY_CANDLE": "1", "TSL_ATR_MULT": "1.25", "HIST_THRESH": "15", "MAX_SUPP": "0",
+    "ENTRY_EVERY_CANDLE": "1", "TSL_ATR_MULT": "1.25", "HIST_THRESH": "10", "MAX_SUPP": "0",
     "MAXPOS": "20", "VOLUME": "0.02", "XTREND_GATE": "1", "XTREND_BUF": "0", "SKIP_WEEKENDS": "0",
     "TRAIL_EVERY_CANDLE": "1", "TRAIL_ENTRY_BAR": "1", "ENTRY_BAR_MODE": "defer",
     "DISABLE_STOP_LOSS": "0", "STOP_SLIPPAGE_PTS": "0", "SPREAD_COST": "0.06",
