@@ -1,9 +1,9 @@
 {
-    "version": "ali-pc-clean-2026-09-13",
-    "built_utc": "2026-09-13T10:30:00Z",
-    "engine": "ENTRY_EVERY_CANDLE=1 (primary gate on every green/red candle, stacking to MAXPOS), HIST_THRESH=10, stop = 1.25 x Wilder ATR(14) trailing each bar CLOSE, amber flattens. All tunables read live from env; .env wins over desk controls unless saved on the dashboard.",
+    "version": "ali-pc-fresh-2026-09-16",
+    "built_utc": "2026-09-15T19:35:00Z",
+    "engine": "Primary HIST_THRESH=10 (buy>=+10 / sell<=-10). Supplementary/stack HIST_THRESH_SUPP=18 (buy>=+18 / sell<=-18). ENTRY_EVERY_CANDLE stack adds also require supp hist gate. Trailing stop ATR or ticks from env/desk controls.",
     "live_desk": "https://35.253.21.246",
-    "notes": "Single-source engine (runtime/mt5_live_engine.py mirrored into Google Console Deployment/app). Bridge binds MT5 tickets and reconciles broker-side closes. Legacy AWS/zip paths removed.",
+    "notes": "Fresh-start tip for Ali detect: hist 10/18, flatten command, TV-like equity pan charts. Apply candle-safe on Ali PC.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",
