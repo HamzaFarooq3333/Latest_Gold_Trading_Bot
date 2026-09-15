@@ -262,7 +262,7 @@
     <div class="legend">
       Fresh raw MT5 candles · warm-up/sample candles are hidden ·
       <strong>execution = closed MT5 M15 signal bar</strong> · chart clock is <strong>UTC</strong> (same as Exness MT5 bar times) ·
-      <strong>arrows only</strong> (no exit circles) · arrow sits on the <strong>decision candle</strong> (closed M15 bar), not the fill clock · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
+      <strong>arrows only</strong> (no exit circles) · arrow on the <strong>decision candle</strong> (the closed M15 that triggered the trade — not the next bar where MT5 filled) · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
     </div>
     <div id="tvWrap">
       <div id="ohlcBox">Hover a candle…</div>
@@ -586,8 +586,10 @@ function decisionBarUnixFromFill(openTime) {
   const t = toUnix(openTime);
   if (t == null) return null;
   const secIntoBar = t % 900;
-  if (secIntoBar <= 120) {
-    return t - secIntoBar - 900; // previous M15 open
+  // Closed-bar fills usually land in the first seconds of the *next* M15.
+  // Map those back onto the decision candle (previous bar open).
+  if (secIntoBar <= 180) {
+    return t - secIntoBar - 900;
   }
   return t - secIntoBar;
 }
@@ -1169,12 +1171,16 @@ function enrichTradesWithLivePnl(trades, positions) {
     const closed = !!(t.close_time || t.exit_time || t.closed_at
       || String(t.status || "").toLowerCase() === "closed");
     let base = t;
-    if (!t.bar_time && t.open_time) {
-      const bu = decisionBarUnixFromFill(t.open_time) ?? toBarUnix(t.open_time);
-      if (bu != null) {
+    if (t.open_time) {
+      const decisionUnix = decisionBarUnixFromFill(t.open_time);
+      const flooredFill = toBarUnix(t.open_time);
+      const stamped = toBarUnix(t.bar_time);
+      // Bridge used to stamp bar_time = floor(fill) (= next candle). Always
+      // rewrite that to the decision candle so arrows sit on the right bar.
+      if (decisionUnix != null && (stamped == null || stamped === flooredFill || stamped !== decisionUnix)) {
         base = {
           ...t,
-          bar_time: new Date(bu * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          bar_time: new Date(decisionUnix * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
         };
       }
     }
@@ -1201,10 +1207,14 @@ function markerTimeForTrade(trade, candles) {
     trade.position_id || trade.ticket || trade.position || ""
   ).trim();
   const series = candles || [];
-  // Prefer decision bar always (re-lock if an older session locked fill clock).
-  let anchorUnix = toBarUnix(trade.bar_time);
-  if (anchorUnix == null && trade.open_time) {
-    anchorUnix = decisionBarUnixFromFill(trade.open_time) ?? toBarUnix(trade.open_time);
+  // Prefer fill→decision mapping over stored bar_time (legacy stamps used
+  // floor(open_time) = next M15 after closed-bar execution).
+  let anchorUnix = null;
+  if (trade.open_time) {
+    anchorUnix = decisionBarUnixFromFill(trade.open_time);
+  }
+  if (anchorUnix == null) {
+    anchorUnix = toBarUnix(trade.bar_time);
   }
   if (anchorUnix == null) return null;
   if (ticketKey && markerAnchorByTicket.has(ticketKey)) {

@@ -570,9 +570,9 @@ def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
             "status": "open", "close_time": None, "close_price": None, "profit": 0.0,
             "sl_comment": "", "broker_comment": "", "exit_reason": "OPEN",
         }
-        ot = _parse_bar_ts(op.get("time"))
-        if ot is not None:
-            tr["bar_time"] = datetime.fromtimestamp(int(ot // 900) * 900, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Closed-bar fills land in the first seconds of the *next* M15.
+        # Stamp the engine decision candle (previous bar), not the fill clock.
+        tr["bar_time"] = decision_bar_time_from_fill(op.get("time"))
         if closes:
             cl = closes[-1]
             comment = cl.get("comment") or ""
@@ -1008,6 +1008,20 @@ def normalize_bar_time(value) -> str:
         return str(value).strip()
     dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def decision_bar_time_from_fill(open_time) -> str | None:
+    """Map an MT5 fill clock back to the closed M15 the engine decided on.
+
+    Example: fill 09:00:04 → decision bar 08:45:00Z (not 09:00).
+    """
+    ot = _parse_bar_ts(open_time)
+    if ot is None:
+        return None
+    floored = int(ot // 900) * 900
+    if (ot - floored) <= 180:
+        floored -= 900
+    return datetime.fromtimestamp(floored, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 ENTRY_ORDER_TYPES = {"ORDER_TYPE_BUY", "ORDER_TYPE_SELL"}
