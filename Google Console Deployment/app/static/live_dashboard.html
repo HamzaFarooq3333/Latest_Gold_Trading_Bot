@@ -86,15 +86,16 @@
   .pnl-readout .k { color: var(--muted); }
   .pnl-charts { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
   @media (max-width: 900px) { .pnl-charts { grid-template-columns: 1fr; } }
+  .pnl-chart-wide { grid-column: 1 / -1; }
   .pnl-chart-wrap {
-    position: relative; height: 150px; border: 1px solid var(--line);
+    position: relative; height: 180px; border: 1px solid var(--line);
     border-radius: 8px; overflow: hidden; background: #0b1016;
   }
   .pnl-chart-wrap .lbl {
     position: absolute; left: 8px; top: 6px; z-index: 2; font-size: .65rem;
     text-transform: uppercase; letter-spacing: .08em; color: var(--muted); pointer-events: none;
   }
-  .pnl-chart { width: 100%; height: 100%; }
+  .pnl-chart { width: 100%; height: 180px; }
   .pnl-empty { padding: 1rem; text-align: center; color: var(--muted); font-size: .82rem; }
   .why { white-space: normal; max-width: 520px; line-height: 1.35; color: #b7c4d4; font-size: .74rem; }
   .tabs { display: flex; gap: .35rem; margin-bottom: .6rem; }
@@ -247,8 +248,8 @@
   <section class="card span2">
     <div class="note">
       <strong>__DESK_TITLE__</strong> — engine mode <strong id="modeNote">waiting for heartbeat</strong>.
-      <strong>Live rules:</strong> on every green/red candle (hist beyond ±<span id="thNote">15</span>) that <strong>breaks the previous body</strong> and sits <strong>clear of X-Trend</strong>, a ticket opens and stacks in the run direction;
-      each ticket trails its own stop (<span id="stopNote">1.25 × ATR(14)</span>) to every bar close; <strong>amber flattens</strong> everything.
+      <strong>Live rules:</strong> primary when hist beyond ±<span id="thNote">10</span>; supplementary/stack when hist beyond ±<span id="thSuppNote">18</span>.
+      Candle must <strong>break the previous body</strong> and sit <strong>clear of X-Trend</strong> for primary; tickets trail (<span id="stopNote">1.25 × ATR(14)</span>) each bar close; <strong>amber flattens</strong> everything.
       Chart = MT5 live M15. Indicator source: <strong id="sourceNote">waiting for heartbeat</strong>.
       Each bar’s <strong>Why</strong> column explains why a trade was taken or skipped.
     </div>
@@ -269,7 +270,7 @@
       <div id="tvChart"></div>
     </div>
     <div class="pnl-panel" id="pnlPanel">
-      <h3>Account flow — banked balance &amp; floating P/L</h3>
+      <h3>Account flow — banked balance, floating P/L &amp; equity</h3>
       <div class="pnl-readout" id="pnlReadout">
         <span><span class="k">bar</span> <span id="pnlBarTime">—</span></span>
         <span><span class="k">banked</span> <span id="pnlBanked">—</span></span>
@@ -284,6 +285,10 @@
         <div class="pnl-chart-wrap">
           <span class="lbl">floating P/L</span>
           <div class="pnl-chart" id="floatChart"></div>
+        </div>
+        <div class="pnl-chart-wrap pnl-chart-wide">
+          <span class="lbl">equity</span>
+          <div class="pnl-chart" id="equityFlowChart"></div>
         </div>
       </div>
       <div class="pnl-empty" id="pnlEmpty" style="display:none">Waiting for MT5 account snapshots…</div>
@@ -405,7 +410,8 @@
       <label class="metric"><div class="lbl">MAXPOS</div><input id="cMAXPOS" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">MAX_SUPP</div><input id="cMAX_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">BEST_LOT_MULT</div><input id="cBEST_LOT_MULT" type="number" step="0.1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
-      <label class="metric"><div class="lbl">HIST_THRESH</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_THRESH (primary)</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_THRESH_SUPP (supp/stack)</div><input id="cHIST_THRESH_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">ENTRY_EVERY_CANDLE</div>
         <select id="cENTRY_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
           <option value="true">true — stack on every candle (live)</option>
@@ -543,6 +549,7 @@ function humanWhy(codeOrText, bar) {
     SKIP_SUPPLEMENTARY_PREVIOUS_BODY_GATE: `No SUPP — hist ${hist} (${z}) did not break the previous candle body.`,
     SKIP_PRIMARY_XTREND_GATE: `No primary — candle not clear of X-Trend (${xt}).`,
     SKIP_SUPPLEMENTARY_XTREND_GATE: `No SUPP — candle not clear of X-Trend (${xt}).`,
+    SKIP_SUPP_HIST_THRESH: `No SUPP/stack — hist ${hist} below supplementary threshold (±${liveSuppThresh()}).`,
     SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_BUY: "No BUY SUPP — close did not progress above last trade candle close.",
     SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_SELL: "No SELL SUPP — close did not progress below last trade candle close.",
     REJECTED_LOCAL_RISK_OR_MAXPOS: "No trade — margin/risk or max positions blocked the entry.",
@@ -614,10 +621,14 @@ let lastControls = {};
 // Histogram colour threshold for bars the bridge did not colour (matches the live control).
 function liveThresh() {
   const t = Number(lastControls.HIST_THRESH);
-  return Number.isFinite(t) && t > 0 ? t : 15;
+  return Number.isFinite(t) && t > 0 ? t : 10;
+}
+function liveSuppThresh() {
+  const t = Number(lastControls.HIST_THRESH_SUPP);
+  return Number.isFinite(t) && t > 0 ? t : 18;
 }
 let chart, candleSeries, xtSeries, histSeries, slSeries, eqChart, eqSeries;
-let bankChart, floatChart, bankSeries, floatSeries;
+let bankChart, floatChart, equityFlowChart, bankSeries, floatSeries, equityFlowSeries;
 let lastBars = [];
 let lastTrades = [];
 let lastSlTrail = [];
@@ -734,10 +745,31 @@ function initCharts() {
   chart.timeScale().subscribeVisibleLogicalRangeChange(syncPnLTimeRange);
 
   eqChart = LightweightCharts.createChart($("eqChart"), {
-    layout: { background: { color: "#141b24" }, textColor: "#8090a4" },
-    grid: { vertLines: { visible: false }, horzLines: { color: "#1a2430" } },
-    rightPriceScale: { borderVisible: false },
-    timeScale: { borderVisible: false, visible: false },
+    layout: { background: { color: "#141b24" }, textColor: "#8090a4", fontFamily: "IBM Plex Mono, Consolas, monospace" },
+    grid: { vertLines: { color: "#1a2430" }, horzLines: { color: "#1a2430" } },
+    rightPriceScale: { borderColor: "#243041" },
+    localization: { locale: "en-GB", timeFormatter: (t) => fmtUtc(t) },
+    timeScale: {
+      borderColor: "#243041",
+      timeVisible: true,
+      secondsVisible: false,
+      rightOffset: 4,
+      tickMarkFormatter: (time) => utcTickMark(time),
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
+    handleScale: {
+      axisPressedMouseMove: { time: true, price: true },
+      axisDoubleClickReset: true,
+      mouseWheel: true,
+      pinch: true,
+    },
+    kineticScroll: { mouse: true, touch: true },
     width: $("eqChart").clientWidth,
     height: 180,
   });
@@ -757,20 +789,37 @@ function initCharts() {
       borderColor: "#243041",
       timeVisible: true,
       secondsVisible: false,
+      rightOffset: 4,
       tickMarkFormatter: (time) => utcTickMark(time),
     },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    handleScroll: false,
-    handleScale: false,
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: true,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
+    handleScale: {
+      axisPressedMouseMove: { time: true, price: true },
+      axisDoubleClickReset: true,
+      mouseWheel: true,
+      pinch: true,
+    },
+    kineticScroll: { mouse: true, touch: true },
   };
-  bankChart = LightweightCharts.createChart($("bankChart"), { ...pnlBaseOpts, width: $("bankChart").clientWidth, height: 150 });
-  floatChart = LightweightCharts.createChart($("floatChart"), { ...pnlBaseOpts, width: $("floatChart").clientWidth, height: 150 });
+  bankChart = LightweightCharts.createChart($("bankChart"), { ...pnlBaseOpts, width: $("bankChart").clientWidth, height: 180 });
+  floatChart = LightweightCharts.createChart($("floatChart"), { ...pnlBaseOpts, width: $("floatChart").clientWidth, height: 180 });
+  equityFlowChart = LightweightCharts.createChart($("equityFlowChart"), { ...pnlBaseOpts, width: $("equityFlowChart").clientWidth, height: 180 });
   bankSeries = bankChart.addAreaSeries({
     lineColor: "#4a8fbf", topColor: "rgba(74,143,191,0.35)", bottomColor: "rgba(74,143,191,0.02)", lineWidth: 2,
     priceLineVisible: false, lastValueVisible: true,
   });
   floatSeries = floatChart.addLineSeries({
     color: "#7cbc6e", lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+  });
+  equityFlowSeries = equityFlowChart.addAreaSeries({
+    lineColor: "#5b9fd4", topColor: "rgba(91,159,212,0.35)", bottomColor: "rgba(91,159,212,0.02)", lineWidth: 2,
+    priceLineVisible: false, lastValueVisible: true,
   });
   const onPnlCrosshair = (param, source) => {
     if (pnlSyncing || !param || param.time == null) return;
@@ -780,17 +829,24 @@ function initCharts() {
     updatePnLReadout(snap);
     if (source !== "bank" && bankChart) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
     if (source !== "float" && floatChart) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+    if (source !== "equity" && equityFlowChart) equityFlowChart.setCrosshairPosition(undefined, param.time, equityFlowSeries);
     if (source !== "tv" && chart) chart.setCrosshairPosition(undefined, param.time, candleSeries);
     pnlSyncing = false;
   };
   bankChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "bank"));
   floatChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "float"));
+  equityFlowChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "equity"));
+  bankChart.timeScale().subscribeVisibleLogicalRangeChange((range) => syncAllTimeRanges(range, "bank"));
+  floatChart.timeScale().subscribeVisibleLogicalRangeChange((range) => syncAllTimeRanges(range, "float"));
+  equityFlowChart.timeScale().subscribeVisibleLogicalRangeChange((range) => syncAllTimeRanges(range, "equityFlow"));
+  eqChart.timeScale().subscribeVisibleLogicalRangeChange((range) => syncAllTimeRanges(range, "eq"));
 
   window.addEventListener("resize", () => {
     chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    eqChart.applyOptions({ width: $("eqChart").clientWidth });
-    if (bankChart) bankChart.applyOptions({ width: $("bankChart").clientWidth, height: 150 });
-    if (floatChart) floatChart.applyOptions({ width: $("floatChart").clientWidth, height: 150 });
+    eqChart.applyOptions({ width: $("eqChart").clientWidth, height: 180 });
+    if (bankChart) bankChart.applyOptions({ width: $("bankChart").clientWidth, height: 180 });
+    if (floatChart) floatChart.applyOptions({ width: $("floatChart").clientWidth, height: 180 });
+    if (equityFlowChart) equityFlowChart.applyOptions({ width: $("equityFlowChart").clientWidth, height: 180 });
   });
   chartReady = true;
 }
@@ -908,13 +964,14 @@ function updatePnLCharts(bars) {
   lastPnLByTime = new Map();
   const bankPts = [];
   const floatPts = [];
+  const eqPts = [];
   let hasMetrics = false;
   (bars || []).forEach(b => {
     const t = toUnix(b.time);
     if (t == null) return;
     const hasB = b.banked_balance != null && Number.isFinite(Number(b.banked_balance));
     const hasF = b.floating_pnl != null && Number.isFinite(Number(b.floating_pnl));
-    if (!hasB && !hasF) return;
+    if (!hasB && !hasF && b.equity == null) return;
     hasMetrics = true;
     const snap = {
       time: t,
@@ -926,6 +983,7 @@ function updatePnLCharts(bars) {
     lastPnLByTime.set(t, snap);
     if (hasB) bankPts.push({ time: t, value: Number(b.banked_balance) });
     if (hasF) floatPts.push({ time: t, value: Number(b.floating_pnl) });
+    if (snap.equity != null && Number.isFinite(snap.equity)) eqPts.push({ time: t, value: snap.equity });
   });
   const emptyEl = $("pnlEmpty");
   const chartsEl = $("pnlCharts");
@@ -935,14 +993,18 @@ function updatePnLCharts(bars) {
     updatePnLReadout(null);
     if (bankSeries) bankSeries.setData([]);
     if (floatSeries) floatSeries.setData([]);
+    if (equityFlowSeries) equityFlowSeries.setData([]);
     return;
   }
   if (emptyEl) emptyEl.style.display = "none";
   if (chartsEl) chartsEl.style.display = "";
   if (bankSeries) bankSeries.setData(bankPts);
   if (floatSeries) floatSeries.setData(floatPts);
-  const lastT = bankPts.length ? bankPts[bankPts.length - 1].time : floatPts[floatPts.length - 1].time;
-  updatePnLReadout(lastPnLByTime.get(lastT));
+  if (equityFlowSeries) equityFlowSeries.setData(eqPts);
+  const lastT = bankPts.length ? bankPts[bankPts.length - 1].time
+    : (floatPts.length ? floatPts[floatPts.length - 1].time
+      : (eqPts.length ? eqPts[eqPts.length - 1].time : null));
+  updatePnLReadout(lastT != null ? lastPnLByTime.get(lastT) : null);
 }
 
 function syncPnLFromTv(param) {
@@ -952,6 +1014,7 @@ function syncPnLFromTv(param) {
     updatePnLReadout(last || null);
     if (bankChart) bankChart.clearCrosshairPosition();
     if (floatChart) floatChart.clearCrosshairPosition();
+    if (equityFlowChart) equityFlowChart.clearCrosshairPosition();
     return;
   }
   const snap = lastPnLByTime.get(param.time);
@@ -960,14 +1023,24 @@ function syncPnLFromTv(param) {
   updatePnLReadout(snap);
   if (bankChart && bankSeries) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
   if (floatChart && floatSeries) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+  if (equityFlowChart && equityFlowSeries) equityFlowChart.setCrosshairPosition(undefined, param.time, equityFlowSeries);
   pnlSyncing = false;
 }
 
 function syncPnLTimeRange(range) {
+  syncAllTimeRanges(range, "tv");
+}
+
+function syncAllTimeRanges(range, source) {
   if (pnlSyncing || !range) return;
   pnlSyncing = true;
-  if (bankChart) bankChart.timeScale().setVisibleLogicalRange(range);
-  if (floatChart) floatChart.timeScale().setVisibleLogicalRange(range);
+  try {
+    if (source !== "tv" && chart) chart.timeScale().setVisibleLogicalRange(range);
+    if (source !== "bank" && bankChart) bankChart.timeScale().setVisibleLogicalRange(range);
+    if (source !== "float" && floatChart) floatChart.timeScale().setVisibleLogicalRange(range);
+    if (source !== "equityFlow" && equityFlowChart) equityFlowChart.timeScale().setVisibleLogicalRange(range);
+    if (source !== "eq" && eqChart) eqChart.timeScale().setVisibleLogicalRange(range);
+  } catch (_) {}
   pnlSyncing = false;
 }
 
@@ -1644,6 +1717,10 @@ async function load() {
       : ((lastControls.TSL_TICKS || "—") + " ticks fixed");
     if ($("modeNote")) $("modeNote").textContent = bridge.engine_mode || (bridge.entry_every_candle === false ? "classic (amber-armed)" : "every candle");
     if ($("thNote")) $("thNote").textContent = String(bridge.hist_thresh != null ? bridge.hist_thresh : liveThresh());
+    if ($("thSuppNote")) $("thSuppNote").textContent = String(
+      bridge.hist_thresh_supp != null ? bridge.hist_thresh_supp
+        : (lastControls.HIST_THRESH_SUPP != null ? lastControls.HIST_THRESH_SUPP : liveSuppThresh())
+    );
     if ($("stopNote")) $("stopNote").textContent = atrMult > 0 ? (atrMult + " × ATR(14)") : ((lastControls.TSL_TICKS || 1111) + " ticks");
     if ($("ctrlSource")) {
       $("ctrlSource").textContent = lastControls.updated_at
@@ -2047,7 +2124,7 @@ $("tabExec").onclick = () => {
 
 const CTRL_KEYS = [
   "VOLUME","TSL_TICKS","TSL_TICK_SIZE","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
-  "BEST_LOT_MULT","HIST_THRESH","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
+  "BEST_LOT_MULT","HIST_THRESH","HIST_THRESH_SUPP","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
   "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
 ];
 const BOOL_CTRL_KEYS = new Set([

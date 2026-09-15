@@ -195,7 +195,7 @@ def build_cfg(env: dict) -> dict:
 
 # Desk controls the bridge honours. Anything else the desk sends is ignored.
 LIVE_CONTROL_KEYS = (
-    "VOLUME", "HIST_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
+    "VOLUME", "HIST_THRESH", "HIST_THRESH_SUPP", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
     "TSL_TICKS", "TSL_TICK_SIZE", "TSL_PTS", "BROKER_MIN_STOP_PTS",
     "STOP_SLIPPAGE_PTS", "SPREAD_COST", "TRAIL_EVERY_CANDLE", "TRAIL_ENTRY_BAR",
     "ENTRY_BAR_MODE", "DISABLE_STOP_LOSS", "MAXPOS", "MAX_SUPP", "BEST_LOT_MULT",
@@ -797,6 +797,7 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
         "engine_sl": live.get("sl_updated"), "engine_sl_changed": live.get("sl_changed"),
         "engine_mode": live.get("mode"),
         "hist_thresh": mt5_live_engine.effective_hist_thresh(),
+        "hist_thresh_supp": mt5_live_engine.effective_hist_thresh_supp(),
         "entry_every_candle": mt5_live_engine.effective_every_candle(),
         "tsl_atr_mult": mt5_live_engine.effective_tsl_atr_mult(),
         "tick_bid": tick_bid, "tick_ask": tick_ask, "tick_time": tick_time, "tick_time_unix": tick_time_unix,

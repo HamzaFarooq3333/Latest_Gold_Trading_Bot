@@ -11,6 +11,7 @@ from urllib.parse import quote
 from fastapi import Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 import auth
 import broker_live
@@ -44,6 +45,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if STATIC.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
 def _path_is_public(path: str) -> bool:
