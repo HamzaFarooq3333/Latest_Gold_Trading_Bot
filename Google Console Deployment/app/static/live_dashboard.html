@@ -1821,16 +1821,19 @@ async function load() {
       `<tr><td>${h.ts||h.time||""}</td><td>${h.host||""}</td><td>${h.lab_action||""}</td><td>${h.bar_time||""}</td><td>${h.note||""}</td></tr>`
     ).join("") : `<tr><td colspan="5" class="muted">No heartbeats</td></tr>`;
 
-    const deals = (b.orders || []).slice().reverse().slice(0, 80).filter(o => {
+    // Raw deals: only realized close/exit fills (entry=1). Opening deals always
+    // print profit 0.0 and are not "made" trades — hide them from this table.
+    const deals = (b.orders || []).slice().reverse().filter(o => {
       const k = String(o.kind || "").toUpperCase();
-      return k === "PRIMARY" || k === "SUPP";
-    });
+      if (k !== "PRIMARY" && k !== "SUPP") return false;
+      return Number(o.entry) === 1;
+    }).slice(0, 80);
     $("dealBody").innerHTML = deals.length ? deals.map(o => {
       const kindLabel = String(o.kind || "").toUpperCase() === "SUPP" ? "SUPPLEMENTARY" : "PRIMARY";
-      const role = String(o.deal_role || (Number(o.entry) === 1 ? "SL/EXIT" : "OPEN")).toUpperCase();
-      const shown = Number(o.entry) === 1 ? `${kindLabel} · ${role}` : kindLabel;
+      const role = String(o.deal_role || "SL/EXIT").toUpperCase();
+      const shown = `${kindLabel} · ${role}`;
       return `<tr><td>${(o.time||"").replace("T"," ").slice(0,19)}</td><td>${o.side||""}</td><td>${o.entry}</td><td>${fmt(o.price)}</td><td class="${Number(o.profit)>=0?'buy':'sell'}">${fmt(o.profit)}</td><td class="kind-${o.kind||'PRIMARY'}">${shown}</td><td>${o.comment||""}</td></tr>`;
-    }).join("") : `<tr><td colspan="7" class="muted">No PRIMARY/SUPP deals</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">No closed PRIMARY/SUPP deals yet</td></tr>`;
     $("execBody").innerHTML = executionLog.length ? executionLog.slice().reverse().slice(0, 80).map(x =>
       `<tr><td>${(x.time||"").replace("T"," ").slice(0,19)}</td><td>${(x.bar_time||"").replace("T"," ").slice(0,19) || "—"}</td><td>${x.action||"NONE"}</td><td class="${x.ok ? "buy" : "sell"}">${x.ok ? "OK" : "FAILED"}</td><td>${(x.results||[]).map(y => `${y.ok ? "OK" : "FAIL"} ${y.retcode ?? ""} ${y.comment || y.error || ""}`).join("<br>") || "—"}</td><td>${x.note||""}</td></tr>`
     ).join("") : `<tr><td colspan="6" class="muted">No execution audit records</td></tr>`;
