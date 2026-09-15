@@ -262,7 +262,7 @@
     <div class="legend">
       Fresh raw MT5 candles · warm-up/sample candles are hidden ·
       <strong>execution = closed MT5 M15 signal bar</strong> · chart clock is <strong>UTC</strong> (same as Exness MT5 bar times) ·
-      <strong>arrows only</strong> (no exit circles) · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
+      <strong>arrows only</strong> (no exit circles) · arrow sits on the <strong>decision candle</strong> (closed M15 bar), not the fill clock · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
     </div>
     <div id="tvWrap">
       <div id="ohlcBox">Hover a candle…</div>
@@ -577,6 +577,19 @@ function toBarUnix(ts) {
   if (t == null) return null;
   // Snap to M15 open in UTC — same grid MT5 uses for bar open times.
   return Math.floor(t / 900) * 900;
+}
+/**
+ * Closed-bar bot: engine decides on bar N at close; MT5 fill often lands in the
+ * first seconds of bar N+1. Map early-in-bar fills back to the decision candle.
+ */
+function decisionBarUnixFromFill(openTime) {
+  const t = toUnix(openTime);
+  if (t == null) return null;
+  const secIntoBar = t % 900;
+  if (secIntoBar <= 120) {
+    return t - secIntoBar - 900; // previous M15 open
+  }
+  return t - secIntoBar;
 }
 function fmtUtc(ts) {
   const u = toUnix(ts);
@@ -1157,7 +1170,7 @@ function enrichTradesWithLivePnl(trades, positions) {
       || String(t.status || "").toLowerCase() === "closed");
     let base = t;
     if (!t.bar_time && t.open_time) {
-      const bu = toBarUnix(t.open_time);
+      const bu = decisionBarUnixFromFill(t.open_time) ?? toBarUnix(t.open_time);
       if (bu != null) {
         base = {
           ...t,
@@ -1179,7 +1192,8 @@ function enrichTradesWithLivePnl(trades, positions) {
 }
 
 /**
- * Entry arrow time: locked to the fill candle for that ticket.
+ * Entry arrow time: on the engine decision candle (bar_time), not the broker
+ * fill clock. Closed-bar fills often land at the open of the next M15.
  * Never uses trade.time / close_time / last bar (those made arrows jump).
  */
 function markerTimeForTrade(trade, candles) {
@@ -1187,16 +1201,21 @@ function markerTimeForTrade(trade, candles) {
     trade.position_id || trade.ticket || trade.position || ""
   ).trim();
   const series = candles || [];
+  // Prefer decision bar always (re-lock if an older session locked fill clock).
+  let anchorUnix = toBarUnix(trade.bar_time);
+  if (anchorUnix == null && trade.open_time) {
+    anchorUnix = decisionBarUnixFromFill(trade.open_time) ?? toBarUnix(trade.open_time);
+  }
+  if (anchorUnix == null) return null;
   if (ticketKey && markerAnchorByTicket.has(ticketKey)) {
     const locked = markerAnchorByTicket.get(ticketKey);
-    const stillThere = resolveMarkerOnCandles(locked, series);
-    if (stillThere != null) return stillThere;
+    // Keep lock only when it already matches the decision candle.
+    if (locked === anchorUnix) {
+      const stillThere = resolveMarkerOnCandles(locked, series);
+      if (stillThere != null) return stillThere;
+    }
   }
-  // open_time / bar_time only — never heartbeat "time" fields.
-  const fillRaw = trade.open_time || trade.bar_time || null;
-  const fillUnix = toUnix(fillRaw);
-  if (fillUnix == null) return null;
-  const resolved = resolveMarkerOnCandles(fillUnix, series);
+  const resolved = resolveMarkerOnCandles(anchorUnix, series);
   if (resolved != null && ticketKey) markerAnchorByTicket.set(ticketKey, resolved);
   return resolved;
 }

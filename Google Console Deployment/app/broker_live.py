@@ -179,17 +179,30 @@ def _session_bar_cutoff(cutoff: datetime | None) -> datetime | None:
 
 
 def _fill_bar_time(open_time) -> str | None:
-    """M15 open (UTC) of the candle where the fill occurred — chart arrow anchor."""
+    """M15 open (UTC) of the *decision* candle for chart arrows.
+
+    Closed-bar execution often fills in the first seconds of the next M15; map
+    those early fills back to the previous bar (the one the engine decided on).
+    """
     stamp = _parse_ts(open_time)
     if stamp is None:
         return None
+    if stamp.tzinfo is None:
+        from datetime import timezone as _tz
+
+        stamp = stamp.replace(tzinfo=_tz.utc)
     minute = (stamp.minute // 15) * 15
     bar = stamp.replace(minute=minute, second=0, microsecond=0)
+    sec_into = int((stamp - bar).total_seconds())
+    if sec_into <= 120:
+        from datetime import timedelta
+
+        bar = bar - timedelta(minutes=15)
     return bar.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _ensure_trade_bar_times(trades: list) -> list:
-    """Guarantee every trade has bar_time = fill candle so UI arrows land correctly."""
+    """Guarantee every trade has bar_time = decision candle for UI arrows."""
     out = []
     for t in trades or []:
         if not isinstance(t, dict):
