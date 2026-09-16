@@ -16,7 +16,7 @@
 | `hist = EMA(WilderRSI(raw close, 3), 5) âˆ’ 50` | colour |
 | X-Trend = **KJ GagaTrend on HA** (`XTREND_SOURCE=gaga`) | clearance gate |
 
-Colour (`HIST_THRESH`, live **10**): green `hist ≥ +10`, red `hist â‰¤ âˆ’15`, amber between.
+Colour (`HIST_THRESH`, live **10**): green `hist >= +10`, red `hist <= -10`, amber between.
 The bridge colours each bar with the live threshold and the engine trusts that colour.
 
 ## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=0`)
