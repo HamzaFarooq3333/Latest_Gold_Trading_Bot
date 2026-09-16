@@ -1,12 +1,13 @@
 {
-    "version": "ali-pc-desk-trades-equity-2026-09-16",
-    "built_utc": "2026-09-16T11:20:00Z",
-    "engine": "Primary HIST_THRESH=10 (buy>=+10 / sell<=-10). Supplementary/stack HIST_THRESH_SUPP=18 (buy>=+18 / sell<=-18). ENTRY_EVERY_CANDLE stack adds also require supp hist gate. Trailing stop ATR or ticks from env/desk controls.",
+    "version": "ali-rollback-8a0f905-maxsupp10-2026-09-16",
+    "built_utc": "2026-09-16T17:35:00Z",
+    "engine": "Rollback to Ali pin 8a0f905 (2026-09-13) + MAX_SUPP=10 classic SUPP (ENTRY_EVERY_CANDLE=0). HIST_THRESH=15 from Ali pin.",
     "live_desk": "https://35.253.21.246",
-    "notes": "Desk: show all recorded tickets on chart, rebuild banked/float/equity from trade path, independent chart pan. Tip bump for Ali detect.",
+    "notes": "Hamza: wipe desk, flatten, restore Ali known-good tree from GitHub pin, allow up to 10 supplementary trades. Tip bump so Ali PC detects+applies.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",
-        "desk_redeploy": "Hamza office watcher (watch_latest_desk_deploy.ps1) on any push"
+        "desk_redeploy": "Hamza office watcher (watch_latest_desk_deploy.ps1) on any push",
+        "rollback_pin": "8a0f905c2ffde6b733e53f1b73cfaf5150a471d8"
     }
 }

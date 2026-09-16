@@ -20,7 +20,7 @@ If the VM is restarted the external IP can change: update `ASIM_LAB_URL` in `C:\
 | MT5 login / server | `472640728` / `Exness-MT5Trial16` |
 | Symbol | `XAUUSDm` |
 | `XTREND_SOURCE` | `gaga` |
-| `ENTRY_EVERY_CANDLE` / `HIST_THRESH` / `TSL_ATR_MULT` | `1` / `10` / `1.25` |
+| `ENTRY_EVERY_CANDLE` / `HIST_THRESH` / `TSL_ATR_MULT` | `1` / `15` / `1.25` |
 | `VOLUME` / `MAXPOS` / `MAX_SUPP` | `0.02` / `20` / `0` |
 | `SKIP_WORST_HOURS` / `FOCUS_BEST_HOURS` / `SKIP_WEEKENDS` | `0` / `0` / `0` |
 | `ASIM_LAB_INSECURE` | `1` (self-signed HTTPS on the desk) |

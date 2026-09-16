@@ -12,15 +12,6 @@ import os
 from datetime import datetime, timezone
 
 MAX_ITEMS = 512
-# UI poll caps — full history stays on disk/store; /state must stay small or the
-# live desk freezes (was ~1.6MB/poll with equity_trail + decision_records).
-UI_EQUITY_TRAIL = 480
-UI_HEARTBEATS = 80
-UI_ORDERS = 400
-UI_SL_TRAIL = 240
-UI_BARS = 240
-UI_OHLC = 240
-STORE_EQUITY_TRAIL = 600
 EXPECTED_LOGIN = int(os.environ.get("EXPECTED_MT5_LOGIN", "0") or 0)
 EXPECTED_SYMBOL = os.environ.get("EXPECTED_MT5_SYMBOL", "XAUUSDm")
 
@@ -28,7 +19,7 @@ EXPECTED_SYMBOL = os.environ.get("EXPECTED_MT5_SYMBOL", "XAUUSDm")
 # reads them back and applies them ONLY once someone has saved them on the
 # dashboard (controls.updated_at set). Until then the bridge's .env governs.
 CONTROL_KEYS = (
-    "VOLUME", "HIST_THRESH", "HIST_THRESH_SUPP", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
+    "VOLUME", "HIST_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
     "TSL_TICKS", "TSL_TICK_SIZE", "TSL_PTS", "BROKER_MIN_STOP_PTS",
     "STOP_SLIPPAGE_PTS", "SPREAD_COST", "TRAIL_EVERY_CANDLE", "TRAIL_ENTRY_BAR",
     "ENTRY_BAR_MODE", "DISABLE_STOP_LOSS", "MAXPOS", "MAX_SUPP", "BEST_LOT_MULT",
@@ -63,8 +54,7 @@ def _default_controls() -> dict:
     surfaces values nobody configured."""
     return {
         "VOLUME": _env_number("VOLUME", 0.02),
-        "HIST_THRESH": _env_number("HIST_THRESH", 10),
-        "HIST_THRESH_SUPP": _env_number("HIST_THRESH_SUPP", 18),
+        "HIST_THRESH": _env_number("HIST_THRESH", 15),
         "ENTRY_EVERY_CANDLE": _env_number("ENTRY_EVERY_CANDLE", 1),
         "TSL_ATR_MULT": _env_number("TSL_ATR_MULT", 1.25),
         "TSL_TICKS": _env_number("TSL_TICKS", 1111),
@@ -140,30 +130,6 @@ def _trim(value, limit: int = MAX_ITEMS) -> list:
     return list(value or [])[-limit:]
 
 
-def _slim_broker_for_ui(broker: dict) -> dict:
-    """Copy for /api/broker/state — drop fat fields the live page does not render."""
-    out = dict(broker or {})
-    bars = _trim(out.get("bars"), UI_BARS)
-    out["bars"] = bars
-    # UI uses bar_history || bars; avoid shipping a second full copy when possible.
-    out["bar_history"] = bars
-    out["ohlc_records"] = _trim(out.get("ohlc_records"), UI_OHLC)
-    out["equity_trail"] = _trim(out.get("equity_trail"), UI_EQUITY_TRAIL)
-    out["heartbeats"] = _trim(out.get("heartbeats"), UI_HEARTBEATS)
-    out["orders"] = _trim(out.get("orders"), UI_ORDERS)
-    out["sl_trail"] = _trim(out.get("sl_trail"), UI_SL_TRAIL)
-    out["execution_log"] = _trim(out.get("execution_log"), 100)
-    bridge = dict(out.get("bridge") or {})
-    # live_dashboard.html never reads decision_records (~0.5MB).
-    if "decision_records" in bridge:
-        bridge["recorded_decision_count"] = bridge.get("recorded_decision_count") or len(
-            bridge.get("decision_records") or []
-        )
-        bridge.pop("decision_records", None)
-    out["bridge"] = bridge
-    return out
-
-
 def _age(ts: str | None) -> float | None:
     if not ts:
         return None
@@ -213,30 +179,17 @@ def _session_bar_cutoff(cutoff: datetime | None) -> datetime | None:
 
 
 def _fill_bar_time(open_time) -> str | None:
-    """M15 open (UTC) of the *decision* candle for chart arrows.
-
-    Closed-bar execution often fills in the first seconds of the next M15; map
-    those early fills back to the previous bar (the one the engine decided on).
-    """
+    """M15 open (UTC) of the candle where the fill occurred — chart arrow anchor."""
     stamp = _parse_ts(open_time)
     if stamp is None:
         return None
-    if stamp.tzinfo is None:
-        from datetime import timezone as _tz
-
-        stamp = stamp.replace(tzinfo=_tz.utc)
     minute = (stamp.minute // 15) * 15
     bar = stamp.replace(minute=minute, second=0, microsecond=0)
-    sec_into = int((stamp - bar).total_seconds())
-    if sec_into <= 120:
-        from datetime import timedelta
-
-        bar = bar - timedelta(minutes=15)
     return bar.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _ensure_trade_bar_times(trades: list) -> list:
-    """Guarantee every trade has bar_time = decision candle for UI arrows."""
+    """Guarantee every trade has bar_time = fill candle so UI arrows land correctly."""
     out = []
     for t in trades or []:
         if not isinstance(t, dict):
@@ -414,7 +367,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
         else:
             broker["bar_history"] = []
         broker["heartbeats"] = _trim(broker.get("heartbeats"))
-        broker["equity_trail"] = _after_session(_trim(broker.get("equity_trail"), STORE_EQUITY_TRAIL), cutoff, ("time", "ts"))
+        broker["equity_trail"] = _after_session(_trim(broker.get("equity_trail"), 3600), cutoff, ("time", "ts"))
         broker["sl_trail"] = _after_session(_trim(broker.get("sl_trail"), 2000), cutoff)
         broker["execution_log"] = _after_session(
             _trim(broker.get("execution_log"), 200), cutoff, ("time", "ts", "bar_time")
@@ -435,7 +388,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                     "profit": profit,
                 }
             )
-            broker["equity_trail"] = broker["equity_trail"][-STORE_EQUITY_TRAIL:]
+            broker["equity_trail"] = broker["equity_trail"][-3600:]
         broker["heartbeats"].append(
             {
                 "time": now,
@@ -617,10 +570,10 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
     if method == "POST" and path == "/api/broker/ali_pc_command":
         body = _body(event)
         action = str(body.get("action") or "").strip().lower()
-        if action not in ("force_check", "restart_stack", "flatten"):
+        if action not in ("force_check", "restart_stack"):
             return response(
                 400,
-                {"ok": False, "error": "action must be force_check, restart_stack, or flatten"},
+                {"ok": False, "error": "action must be force_check or restart_stack"},
             )
         now = _now()
         cmd = {
@@ -694,7 +647,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
             200,
             {
                 "ok": True,
-                "broker": _slim_broker_for_ui(broker),
+                "broker": broker,
                 "expected_login": EXPECTED_LOGIN,
                 "expected_symbol": EXPECTED_SYMBOL,
                 "model_name": model_name,

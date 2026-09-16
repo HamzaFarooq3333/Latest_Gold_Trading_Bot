@@ -195,7 +195,7 @@ def build_cfg(env: dict) -> dict:
 
 # Desk controls the bridge honours. Anything else the desk sends is ignored.
 LIVE_CONTROL_KEYS = (
-    "VOLUME", "HIST_THRESH", "HIST_THRESH_SUPP", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
+    "VOLUME", "HIST_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
     "TSL_TICKS", "TSL_TICK_SIZE", "TSL_PTS", "BROKER_MIN_STOP_PTS",
     "STOP_SLIPPAGE_PTS", "SPREAD_COST", "TRAIL_EVERY_CANDLE", "TRAIL_ENTRY_BAR",
     "ENTRY_BAR_MODE", "DISABLE_STOP_LOSS", "MAXPOS", "MAX_SUPP", "BEST_LOT_MULT",
@@ -570,9 +570,9 @@ def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
             "status": "open", "close_time": None, "close_price": None, "profit": 0.0,
             "sl_comment": "", "broker_comment": "", "exit_reason": "OPEN",
         }
-        # Closed-bar fills land in the first seconds of the *next* M15.
-        # Stamp the engine decision candle (previous bar), not the fill clock.
-        tr["bar_time"] = decision_bar_time_from_fill(op.get("time"))
+        ot = _parse_bar_ts(op.get("time"))
+        if ot is not None:
+            tr["bar_time"] = datetime.fromtimestamp(int(ot // 900) * 900, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if closes:
             cl = closes[-1]
             comment = cl.get("comment") or ""
@@ -797,7 +797,6 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
         "engine_sl": live.get("sl_updated"), "engine_sl_changed": live.get("sl_changed"),
         "engine_mode": live.get("mode"),
         "hist_thresh": mt5_live_engine.effective_hist_thresh(),
-        "hist_thresh_supp": mt5_live_engine.effective_hist_thresh_supp(),
         "entry_every_candle": mt5_live_engine.effective_every_candle(),
         "tsl_atr_mult": mt5_live_engine.effective_tsl_atr_mult(),
         "tick_bid": tick_bid, "tick_ask": tick_ask, "tick_time": tick_time, "tick_time_unix": tick_time_unix,
@@ -1009,20 +1008,6 @@ def normalize_bar_time(value) -> str:
         return str(value).strip()
     dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def decision_bar_time_from_fill(open_time) -> str | None:
-    """Map an MT5 fill clock back to the closed M15 the engine decided on.
-
-    Example: fill 09:00:04 → decision bar 08:45:00Z (not 09:00).
-    """
-    ot = _parse_bar_ts(open_time)
-    if ot is None:
-        return None
-    floored = int(ot // 900) * 900
-    if (ot - floored) <= 180:
-        floored -= 900
-    return datetime.fromtimestamp(floored, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 ENTRY_ORDER_TYPES = {"ORDER_TYPE_BUY", "ORDER_TYPE_SELL"}

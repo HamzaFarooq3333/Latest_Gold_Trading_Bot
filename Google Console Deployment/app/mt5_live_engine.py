@@ -79,22 +79,6 @@ def effective_hist_thresh() -> float:
     return _env_float("HIST_THRESH", 10.0)
 
 
-def effective_hist_thresh_supp() -> float:
-    """Supplementary hist gate (buy >= +TH, sell <= -TH). Default 18."""
-    return _env_float("HIST_THRESH_SUPP", 18.0)
-
-
-def supp_hist_ok(hist: float, want: int) -> bool:
-    """True when histogram strength is enough for a SUPP ticket on this side."""
-    th = effective_hist_thresh_supp()
-    h = float(hist)
-    if want > 0:
-        return h >= th
-    if want < 0:
-        return h <= -th
-    return False
-
-
 def effective_maxpos() -> int:
     return max(1, _env_int("MAXPOS", 20))
 
@@ -327,7 +311,6 @@ def explain_decision(code: str, *, action: str = "NONE", zone: str = "",
         "SKIP_SUPPLEMENTARY_NO_TRADE_WICK": "No SUPP - no last-trade wick level stored yet.",
         "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE": "No SUPP - this candle did not break the last trade candle's wick.",
         "SKIP_SUPPLEMENTARY_XTREND_GATE": f"No SUPP - candle touches X-Trend ({xt_s}) and XTREND_GATE_SUPP is ON.",
-        "SKIP_SUPP_HIST_THRESH": f"No SUPP/stack - hist {hist_s} below supplementary threshold.",
         "SKIP_OPPOSITE_SIDE_OPEN": (
             f"No entry - hist {hist_s} ({z}) is the opposite colour to the open run; wait for amber."),
         "REJECTED_LOCAL_RISK_OR_MAXPOS": "No trade - blocked by margin/risk or max open positions.",
@@ -829,7 +812,7 @@ class LatestModsEngine:
                         self._advance_best(p, ec, self.pos)
                 # Classic mode: at most one new ticket per bar - a SUPP on the
                 # raw wick break of the last trade candle.
-                if (not every and zz == self.pos and supp_hist_ok(hist, self.pos)
+                if (not every and zz == self.pos
                         and self._entry_ok(eh, el, xtrend, self.pos, self.break_level, False)):
                     if not hour_allowed(hour, self.skip_worst_hours):
                         self.hour_skips += 1
@@ -843,7 +826,7 @@ class LatestModsEngine:
 
         # 2. Classic mode: flat but the run is still alive - re-enter as SUPP.
         if (not every and not just_opened and not self.positions and self.run_side != 0
-                and zz == self.run_side and supp_hist_ok(hist, self.run_side)
+                and zz == self.run_side
                 and self._entry_ok(eh, el, xtrend, self.run_side, self.break_level, False)):
             if not hour_allowed(hour, self.skip_worst_hours):
                 self.hour_skips += 1
@@ -867,10 +850,7 @@ class LatestModsEngine:
             want = zz
             can_try = (self._n_total() == 0 or self.pos == zz) if every else (
                 self._n_total() == 0 and self.run_side == 0 and self.seen_amber)
-            # Stack / SUPP adds need the stricter supplementary hist gate.
-            if every and self._n_total() > 0 and not supp_hist_ok(hist, want):
-                self.last_entry_reason = "SKIP_SUPP_HIST_THRESH"
-            elif can_try and self._entry_ok(h, l, xtrend, want, None, True):
+            if can_try and self._entry_ok(h, l, xtrend, want, None, True):
                 if not hour_allowed(hour, self.skip_worst_hours):
                     self.hour_skips += 1
                     self.last_entry_reason = f"SKIP_WORST_HOUR_{hour}"
@@ -959,7 +939,6 @@ class LatestModsEngine:
             "weekend_skips": self.weekend_skips, "skip_weekends": effective_skip_weekends(),
             "mode": self._mode_label(),
             "entry_every_candle": every, "hist_thresh": effective_hist_thresh(),
-            "hist_thresh_supp": effective_hist_thresh_supp(),
             "tsl_mode": "atr" if effective_tsl_atr_mult() > 0 else "ticks",
             "tsl_atr_mult": effective_tsl_atr_mult(), "atr": round(float(self._atr), 4),
             "tsl_ticks": effective_tsl_ticks(), "tsl_tick_size": effective_tick_size(),

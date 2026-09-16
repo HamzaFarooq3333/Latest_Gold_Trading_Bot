@@ -25,7 +25,7 @@ This PC = execution / feed. The GCP Linux VM = dashboard. **Never** run `gcloud`
 | `ASIM_LAB_URL` / `ASIM_LAB_INSECURE` | `https://35.253.21.246` / `1` |
 | MT5 | demo `472640728` @ `Exness-MT5Trial16`, `XAUUSDm` **M15**, portable terminal at `C:\onyxion-ali\exness-mt5` |
 | `XTREND_SOURCE` | `gaga` |
-| Strategy | `ENTRY_EVERY_CANDLE=1`, `HIST_THRESH=10`, `TSL_ATR_MULT=1.25`, `VOLUME=0.02`, `MAXPOS=20`, `MAX_SUPP=0` |
+| Strategy | `ENTRY_EVERY_CANDLE=1`, `HIST_THRESH=15`, `TSL_ATR_MULT=1.25`, `VOLUME=0.02`, `MAXPOS=20`, `MAX_SUPP=0` |
 | Hour / weekend filters | `SKIP_WORST_HOURS=0`, `FOCUS_BEST_HOURS=0`, `SKIP_WEEKENDS=0` |
 | Password | demo **trading** password, only in `C:\onyxion-ali\.env` — never print it |
 

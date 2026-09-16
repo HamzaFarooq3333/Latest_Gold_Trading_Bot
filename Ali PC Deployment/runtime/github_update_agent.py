@@ -452,15 +452,9 @@ def apply_update(state: dict, env: dict) -> None:
     post_status(env, build_payload(state, env))
     log(f"waiting candle close={plan['waited_close_bar']} skip={plan['skip_bar_time']} sec={plan['wait_sec']}")
     deadline = time.time() + plan["wait_sec"]
-    last_wait_post = time.time()
     while time.time() < deadline:
         time.sleep(min(15, max(1, deadline - time.time())))
         write_status(build_payload(state, env))
-        # Keep desk Ali-PC panel online during candle wait (desk redeploy
-        # wipes ali_pc; without posts the UI shows AGENT OFFLINE for >90s).
-        if time.time() - last_wait_post >= STATUS_SECONDS:
-            post_status(env, build_payload(state, env))
-            last_wait_post = time.time()
 
     write_deploy_skip_marker(skip_bar_time=plan["skip_bar_time"], waited_close_bar=plan["waited_close_bar"],
                              version=str((read_json(ROOT / "VERSION.json", {}) or {}).get("version") or "unknown"))
@@ -508,30 +502,6 @@ def apply_update(state: dict, env: dict) -> None:
         state["requests_ack"]["restart_stack"] = _now().isoformat()
 
 
-def flatten_positions_safe() -> dict:
-    """Close all open Onyxion magic positions via MT5 (desk-requested flatten)."""
-    script = ROOT / "flatten_open_positions.py"
-    if not script.is_file():
-        return {"ok": False, "error": f"missing {script}"}
-    py = sys.executable or "python"
-    try:
-        proc = subprocess.run(
-            [py, str(script)],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-    tail = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip().splitlines()[-20:]
-    return {
-        "ok": proc.returncode == 0,
-        "exit_code": proc.returncode,
-        "log_tail": tail,
-    }
-
-
 def handle_commands(state: dict, env: dict, pending: list) -> None:
     ack = dict(state.get("requests_ack") or {})
     handled = list(ack.get("handled_ids") or [])
@@ -549,12 +519,6 @@ def handle_commands(state: dict, env: dict, pending: list) -> None:
             note = restart_stack_safe(in_flight_wait=in_flight)
             log(f"restart_stack id={cid} note={note}")
             ack["restart_stack"], ack["restart_stack_id"] = _now().isoformat(), cid
-            handled.append(cid)
-        elif action == "flatten":
-            note = flatten_positions_safe()
-            log(f"flatten id={cid} note={note}")
-            ack["flatten"], ack["flatten_id"] = _now().isoformat(), cid
-            ack["flatten_result"] = note
             handled.append(cid)
     ack["handled_ids"] = handled[-32:]
     state["requests_ack"] = ack

@@ -1,4 +1,4 @@
-﻿# Live Trading Rules â€” Ali desk, current as of 2026-09-13
+# Live Trading Rules â€” Ali desk, current as of 2026-09-13
 
 > **Source of truth for behaviour:** `Ali PC Deployment/runtime/mt5_live_engine.py`
 > (byte-identical copy in `Google Console Deployment/app/mt5_live_engine.py`).
@@ -16,10 +16,10 @@
 | `hist = EMA(WilderRSI(raw close, 3), 5) âˆ’ 50` | colour |
 | X-Trend = **KJ GagaTrend on HA** (`XTREND_SOURCE=gaga`) | clearance gate |
 
-Colour (`HIST_THRESH`, live **10**): green `hist ≥ +10`, red `hist ≤ −10`, amber between.
+Colour (`HIST_THRESH`, live **15**): green `hist â‰¥ +15`, red `hist â‰¤ âˆ’15`, amber between.
 The bridge colours each bar with the live threshold and the engine trusts that colour.
 
-## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=1`)
+## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=0`)
 
 On **every** green (red) candle:
 
@@ -28,7 +28,7 @@ On **every** green (red) candle:
 
 â†’ open one ticket at the previous body level (or this raw open if it gapped through; live: current ask/bid).
 Tickets **stack in the run direction** up to `MAXPOS=20`; an opposite-colour candle while tickets are open does nothing.
-No amber arming, no supplementary wick logic (`MAX_SUPP=0`).
+No amber arming, no supplementary wick logic (`MAX_SUPP=10`).
 
 Same-bar sequencing: stops are tested first, then the entry gate â€” a bar that stops the run out and passes the gate re-enters on that bar.
 

@@ -86,16 +86,15 @@
   .pnl-readout .k { color: var(--muted); }
   .pnl-charts { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; }
   @media (max-width: 900px) { .pnl-charts { grid-template-columns: 1fr; } }
-  .pnl-chart-wide { grid-column: 1 / -1; }
   .pnl-chart-wrap {
-    position: relative; height: 180px; border: 1px solid var(--line);
+    position: relative; height: 150px; border: 1px solid var(--line);
     border-radius: 8px; overflow: hidden; background: #0b1016;
   }
   .pnl-chart-wrap .lbl {
     position: absolute; left: 8px; top: 6px; z-index: 2; font-size: .65rem;
     text-transform: uppercase; letter-spacing: .08em; color: var(--muted); pointer-events: none;
   }
-  .pnl-chart { width: 100%; height: 180px; }
+  .pnl-chart { width: 100%; height: 100%; }
   .pnl-empty { padding: 1rem; text-align: center; color: var(--muted); font-size: .82rem; }
   .why { white-space: normal; max-width: 520px; line-height: 1.35; color: #b7c4d4; font-size: .74rem; }
   .tabs { display: flex; gap: .35rem; margin-bottom: .6rem; }
@@ -248,8 +247,8 @@
   <section class="card span2">
     <div class="note">
       <strong>__DESK_TITLE__</strong> — engine mode <strong id="modeNote">waiting for heartbeat</strong>.
-      <strong>Live rules:</strong> primary when hist beyond ±<span id="thNote">10</span>; supplementary/stack when hist beyond ±<span id="thSuppNote">18</span>.
-      Candle must <strong>break the previous body</strong> and sit <strong>clear of X-Trend</strong> for primary; tickets trail (<span id="stopNote">1.25 × ATR(14)</span>) each bar close; <strong>amber flattens</strong> everything.
+      <strong>Live rules:</strong> on every green/red candle (hist beyond ±<span id="thNote">15</span>) that <strong>breaks the previous body</strong> and sits <strong>clear of X-Trend</strong>, a ticket opens and stacks in the run direction;
+      each ticket trails its own stop (<span id="stopNote">1.25 × ATR(14)</span>) to every bar close; <strong>amber flattens</strong> everything.
       Chart = MT5 live M15. Indicator source: <strong id="sourceNote">waiting for heartbeat</strong>.
       Each bar’s <strong>Why</strong> column explains why a trade was taken or skipped.
     </div>
@@ -263,14 +262,14 @@
     <div class="legend">
       Fresh raw MT5 candles · warm-up/sample candles are hidden ·
       <strong>execution = closed MT5 M15 signal bar</strong> · chart clock is <strong>UTC</strong> (same as Exness MT5 bar times) ·
-      <strong>arrows only</strong> (no exit circles) · arrow on the <strong>decision candle</strong> (the closed M15 that triggered the trade — not the next bar where MT5 filled) · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
+      <strong>arrows only</strong> (no exit circles) · primary BUY green / SELL red · supplementary blue · PnL on the arrow when closed · orange = X-Trend · magenta = trailing stop
     </div>
     <div id="tvWrap">
       <div id="ohlcBox">Hover a candle…</div>
       <div id="tvChart"></div>
     </div>
     <div class="pnl-panel" id="pnlPanel">
-      <h3>Account flow — banked balance, floating P/L &amp; equity</h3>
+      <h3>Account flow — banked balance &amp; floating P/L</h3>
       <div class="pnl-readout" id="pnlReadout">
         <span><span class="k">bar</span> <span id="pnlBarTime">—</span></span>
         <span><span class="k">banked</span> <span id="pnlBanked">—</span></span>
@@ -285,10 +284,6 @@
         <div class="pnl-chart-wrap">
           <span class="lbl">floating P/L</span>
           <div class="pnl-chart" id="floatChart"></div>
-        </div>
-        <div class="pnl-chart-wrap pnl-chart-wide">
-          <span class="lbl">equity</span>
-          <div class="pnl-chart" id="equityFlowChart"></div>
         </div>
       </div>
       <div class="pnl-empty" id="pnlEmpty" style="display:none">Waiting for MT5 account snapshots…</div>
@@ -410,8 +405,7 @@
       <label class="metric"><div class="lbl">MAXPOS</div><input id="cMAXPOS" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">MAX_SUPP</div><input id="cMAX_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">BEST_LOT_MULT</div><input id="cBEST_LOT_MULT" type="number" step="0.1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
-      <label class="metric"><div class="lbl">HIST_THRESH (primary)</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
-      <label class="metric"><div class="lbl">HIST_THRESH_SUPP (supp/stack)</div><input id="cHIST_THRESH_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_THRESH</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">ENTRY_EVERY_CANDLE</div>
         <select id="cENTRY_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
           <option value="true">true — stack on every candle (live)</option>
@@ -549,7 +543,6 @@ function humanWhy(codeOrText, bar) {
     SKIP_SUPPLEMENTARY_PREVIOUS_BODY_GATE: `No SUPP — hist ${hist} (${z}) did not break the previous candle body.`,
     SKIP_PRIMARY_XTREND_GATE: `No primary — candle not clear of X-Trend (${xt}).`,
     SKIP_SUPPLEMENTARY_XTREND_GATE: `No SUPP — candle not clear of X-Trend (${xt}).`,
-    SKIP_SUPP_HIST_THRESH: `No SUPP/stack — hist ${hist} below supplementary threshold (±${liveSuppThresh()}).`,
     SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_BUY: "No BUY SUPP — close did not progress above last trade candle close.",
     SKIP_SUPPLEMENTARY_CLOSE_PROGRESS_SELL: "No SELL SUPP — close did not progress below last trade candle close.",
     REJECTED_LOCAL_RISK_OR_MAXPOS: "No trade — margin/risk or max positions blocked the entry.",
@@ -585,21 +578,6 @@ function toBarUnix(ts) {
   // Snap to M15 open in UTC — same grid MT5 uses for bar open times.
   return Math.floor(t / 900) * 900;
 }
-/**
- * Closed-bar bot: engine decides on bar N at close; MT5 fill often lands in the
- * first seconds of bar N+1. Map early-in-bar fills back to the decision candle.
- */
-function decisionBarUnixFromFill(openTime) {
-  const t = toUnix(openTime);
-  if (t == null) return null;
-  const secIntoBar = t % 900;
-  // Closed-bar fills usually land in the first seconds of the *next* M15.
-  // Map those back onto the decision candle (previous bar open).
-  if (secIntoBar <= 180) {
-    return t - secIntoBar - 900;
-  }
-  return t - secIntoBar;
-}
 function fmtUtc(ts) {
   const u = toUnix(ts);
   if (u == null) return "—";
@@ -621,26 +599,18 @@ let lastControls = {};
 // Histogram colour threshold for bars the bridge did not colour (matches the live control).
 function liveThresh() {
   const t = Number(lastControls.HIST_THRESH);
-  return Number.isFinite(t) && t > 0 ? t : 10;
-}
-function liveSuppThresh() {
-  const t = Number(lastControls.HIST_THRESH_SUPP);
-  return Number.isFinite(t) && t > 0 ? t : 18;
+  return Number.isFinite(t) && t > 0 ? t : 15;
 }
 let chart, candleSeries, xtSeries, histSeries, slSeries, eqChart, eqSeries;
-let bankChart, floatChart, equityFlowChart, bankSeries, floatSeries, equityFlowSeries;
+let bankChart, floatChart, bankSeries, floatSeries;
 let lastBars = [];
 let lastTrades = [];
 let lastSlTrail = [];
 let lastPnLByTime = new Map();
+let pnlSyncing = false;
 let accountTrail = [];
 let chartReady = false;
 let sessionStartMs = null;
-// User-controlled visible window on the main TV chart (time-based). Restored
-// after setData so live polls do not yank left/right pan/zoom.
-let tvUserTimeRange = null;
-let tvUserPriceRange = null;
-let tvRangeSaveTimer = null;
 
 function initCharts() {
   if (typeof LightweightCharts === "undefined") {
@@ -679,8 +649,6 @@ function initCharts() {
       timeVisible: true,
       secondsVisible: false,
       rightOffset: 4,
-      shiftVisibleRangeOnNewBar: false,
-      lockVisibleTimeRangeOnResize: true,
       tickMarkFormatter: (time) => utcTickMark(time),
     },
     // Allow left/right AND up/down pan + zoom (mouse wheel / drag price axis).
@@ -737,57 +705,24 @@ function initCharts() {
   });
 
   chart.subscribeCrosshairMove((param) => {
+    const box = $("ohlcBox");
     if (!param || !param.time) {
       if (lastBars.length) showBarOhlc(lastBars[lastBars.length - 1]);
+      syncPnLFromTv(param);
       return;
     }
     const bar = lastBars.find(b => toUnix(b.time) === param.time);
     if (bar) showBarOhlc(bar);
+    syncPnLFromTv(param);
   });
 
-  // Remember TV pan/zoom only — do NOT mirror onto equity/bank/float charts.
-  chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
-    if (!range || range.from == null || range.to == null) return;
-    if (tvRangeSaveTimer) clearTimeout(tvRangeSaveTimer);
-    tvRangeSaveTimer = setTimeout(() => {
-      tvUserTimeRange = { from: range.from, to: range.to };
-    }, 80);
-  });
-  try {
-    chart.priceScale("right").subscribeVisiblePriceRangeChange?.((range) => {
-      if (!range || range.from == null || range.to == null) return;
-      tvUserPriceRange = { from: range.from, to: range.to };
-    });
-  } catch (_) {}
+  chart.timeScale().subscribeVisibleLogicalRangeChange(syncPnLTimeRange);
 
   eqChart = LightweightCharts.createChart($("eqChart"), {
-    layout: { background: { color: "#141b24" }, textColor: "#8090a4", fontFamily: "IBM Plex Mono, Consolas, monospace" },
-    grid: { vertLines: { color: "#1a2430" }, horzLines: { color: "#1a2430" } },
-    rightPriceScale: { borderColor: "#243041" },
-    localization: { locale: "en-GB", timeFormatter: (t) => fmtUtc(t) },
-    timeScale: {
-      borderColor: "#243041",
-      timeVisible: true,
-      secondsVisible: false,
-      rightOffset: 4,
-      shiftVisibleRangeOnNewBar: false,
-      lockVisibleTimeRangeOnResize: true,
-      tickMarkFormatter: (time) => utcTickMark(time),
-    },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    handleScroll: {
-      mouseWheel: true,
-      pressedMouseMove: true,
-      horzTouchDrag: true,
-      vertTouchDrag: true,
-    },
-    handleScale: {
-      axisPressedMouseMove: { time: true, price: true },
-      axisDoubleClickReset: true,
-      mouseWheel: true,
-      pinch: true,
-    },
-    kineticScroll: { mouse: true, touch: true },
+    layout: { background: { color: "#141b24" }, textColor: "#8090a4" },
+    grid: { vertLines: { visible: false }, horzLines: { color: "#1a2430" } },
+    rightPriceScale: { borderVisible: false },
+    timeScale: { borderVisible: false, visible: false },
     width: $("eqChart").clientWidth,
     height: 180,
   });
@@ -807,29 +742,14 @@ function initCharts() {
       borderColor: "#243041",
       timeVisible: true,
       secondsVisible: false,
-      rightOffset: 4,
-      shiftVisibleRangeOnNewBar: false,
-      lockVisibleTimeRangeOnResize: true,
       tickMarkFormatter: (time) => utcTickMark(time),
     },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    handleScroll: {
-      mouseWheel: true,
-      pressedMouseMove: true,
-      horzTouchDrag: true,
-      vertTouchDrag: true,
-    },
-    handleScale: {
-      axisPressedMouseMove: { time: true, price: true },
-      axisDoubleClickReset: true,
-      mouseWheel: true,
-      pinch: true,
-    },
-    kineticScroll: { mouse: true, touch: true },
+    handleScroll: false,
+    handleScale: false,
   };
-  bankChart = LightweightCharts.createChart($("bankChart"), { ...pnlBaseOpts, width: $("bankChart").clientWidth, height: 180 });
-  floatChart = LightweightCharts.createChart($("floatChart"), { ...pnlBaseOpts, width: $("floatChart").clientWidth, height: 180 });
-  equityFlowChart = LightweightCharts.createChart($("equityFlowChart"), { ...pnlBaseOpts, width: $("equityFlowChart").clientWidth, height: 180 });
+  bankChart = LightweightCharts.createChart($("bankChart"), { ...pnlBaseOpts, width: $("bankChart").clientWidth, height: 150 });
+  floatChart = LightweightCharts.createChart($("floatChart"), { ...pnlBaseOpts, width: $("floatChart").clientWidth, height: 150 });
   bankSeries = bankChart.addAreaSeries({
     lineColor: "#4a8fbf", topColor: "rgba(74,143,191,0.35)", bottomColor: "rgba(74,143,191,0.02)", lineWidth: 2,
     priceLineVisible: false, lastValueVisible: true,
@@ -837,31 +757,25 @@ function initCharts() {
   floatSeries = floatChart.addLineSeries({
     color: "#7cbc6e", lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
   });
-  equityFlowSeries = equityFlowChart.addAreaSeries({
-    lineColor: "#5b9fd4", topColor: "rgba(91,159,212,0.35)", bottomColor: "rgba(91,159,212,0.02)", lineWidth: 2,
-    priceLineVisible: false, lastValueVisible: true,
-  });
-  // Each P/L chart pans/zooms on its own. Crosshair only updates the readout
-  // for that chart — never drags sibling charts or the main TV.
-  const onPnlCrosshair = (param) => {
-    if (!param || param.time == null) {
-      const last = [...lastPnLByTime.values()].pop();
-      updatePnLReadout(last || null);
-      return;
-    }
+  const onPnlCrosshair = (param, source) => {
+    if (pnlSyncing || !param || param.time == null) return;
     const snap = lastPnLByTime.get(param.time);
-    if (snap) updatePnLReadout(snap);
+    if (!snap) return;
+    pnlSyncing = true;
+    updatePnLReadout(snap);
+    if (source !== "bank" && bankChart) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
+    if (source !== "float" && floatChart) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+    if (source !== "tv" && chart) chart.setCrosshairPosition(undefined, param.time, candleSeries);
+    pnlSyncing = false;
   };
-  bankChart.subscribeCrosshairMove(onPnlCrosshair);
-  floatChart.subscribeCrosshairMove(onPnlCrosshair);
-  equityFlowChart.subscribeCrosshairMove(onPnlCrosshair);
+  bankChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "bank"));
+  floatChart.subscribeCrosshairMove(p => onPnlCrosshair(p, "float"));
 
   window.addEventListener("resize", () => {
     chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    eqChart.applyOptions({ width: $("eqChart").clientWidth, height: 180 });
-    if (bankChart) bankChart.applyOptions({ width: $("bankChart").clientWidth, height: 180 });
-    if (floatChart) floatChart.applyOptions({ width: $("floatChart").clientWidth, height: 180 });
-    if (equityFlowChart) equityFlowChart.applyOptions({ width: $("equityFlowChart").clientWidth, height: 180 });
+    eqChart.applyOptions({ width: $("eqChart").clientWidth });
+    if (bankChart) bankChart.applyOptions({ width: $("bankChart").clientWidth, height: 150 });
+    if (floatChart) floatChart.applyOptions({ width: $("floatChart").clientWidth, height: 150 });
   });
   chartReady = true;
 }
@@ -886,16 +800,13 @@ function showBarOhlc(b) {
   const zone = b.zone || b.histcolor || "";
   const status = b.forming ? "FORMING" : (b.chartSkipped ? "SKIPPED" : (b.action || "NONE"));
   let pnlLines = "";
-  const barT = toUnix(b.time);
-  const lastT = lastBars.length ? toUnix(lastBars[lastBars.length - 1].time) : null;
-  const isLiveBar = !!(b.forming || (barT != null && lastT != null && barT === lastT));
   const barFloat = b.floating_pnl != null && Number.isFinite(Number(b.floating_pnl))
     ? Number(b.floating_pnl) : null;
   const liveFloat = lastAccountSnap.profit != null && Number.isFinite(Number(lastAccountSnap.profit))
     ? Number(lastAccountSnap.profit) : null;
-  const showFloat = isLiveBar && liveFloat != null ? liveFloat : barFloat;
-  const showEq = isLiveBar && lastAccountSnap.equity != null ? lastAccountSnap.equity : b.equity;
-  const showBal = isLiveBar && lastAccountSnap.balance != null ? lastAccountSnap.balance : b.banked_balance;
+  const showFloat = liveFloat != null ? liveFloat : barFloat;
+  const showEq = lastAccountSnap.equity != null ? lastAccountSnap.equity : b.equity;
+  const showBal = lastAccountSnap.balance != null ? lastAccountSnap.balance : b.banked_balance;
   if (showBal != null && Number.isFinite(Number(showBal))) {
     pnlLines += `<div><span class="k">Banked</span> ${money(showBal)} &nbsp; <span class="k">Floating</span> <span class="${clsPnL(showFloat)}">${money(showFloat)}</span> &nbsp; <span class="k">Equity</span> ${money(showEq)}</div>`;
   } else if (showFloat != null) {
@@ -957,48 +868,6 @@ function attachBarMetrics(bars, trail) {
   });
 }
 
-/** Rebuild banked / floating / equity at each M15 from the MT5 trade record.
- *  Heartbeat equity_trail only covers recent minutes; older candles were
- *  showing *current* live equity. Closed-trade profits step banked; tickets
- *  still open at that bar are marked to the bar's raw close. */
-function reconstructAccountPath(bars, trades, liveAccount) {
-  const endBal = Number(liveAccount && liveAccount.balance);
-  const hasEnd = Number.isFinite(endBal);
-  const CONTRACT = 100;
-  const list = (trades || []).filter((t) => t && (t.open_time || t.bar_time));
-  return (bars || []).map((b) => {
-    const t = toUnix(b.time);
-    if (t == null) return b;
-    const barEnd = t + 900;
-    let laterClosed = 0;
-    let floatMark = 0;
-    const mark = firstFinite(b.raw_close, b.chart_close, b.close);
-    for (const tr of list) {
-      const cu = toUnix(tr.close_time);
-      const ou = toUnix(tr.open_time) ?? toBarUnix(tr.bar_time);
-      const pnl = Number(tr.profit);
-      if (cu != null && cu > barEnd && Number.isFinite(pnl)) laterClosed += pnl;
-      const opened = ou != null && ou < barEnd;
-      const stillOpen = cu == null || cu > barEnd;
-      if (opened && stillOpen && mark != null && Number.isFinite(Number(tr.open_price))) {
-        const vol = Number(tr.volume);
-        const lot = Number.isFinite(vol) && vol > 0 ? vol : 0.02;
-        const entry = Number(tr.open_price);
-        const dir = String(tr.side || "").toUpperCase() === "SELL" ? -1 : 1;
-        floatMark += (Number(mark) - entry) * dir * lot * CONTRACT;
-      }
-    }
-    const banked = hasEnd ? endBal - laterClosed : null;
-    const equity = banked != null ? banked + floatMark : null;
-    return {
-      ...b,
-      banked_balance: banked,
-      floating_pnl: Math.round(floatMark * 100) / 100,
-      equity: equity != null ? Math.round(equity * 100) / 100 : null,
-    };
-  });
-}
-
 function updatePnLReadout(snap) {
   const tEl = $("pnlBarTime");
   const bEl = $("pnlBanked");
@@ -1024,14 +893,13 @@ function updatePnLCharts(bars) {
   lastPnLByTime = new Map();
   const bankPts = [];
   const floatPts = [];
-  const eqPts = [];
   let hasMetrics = false;
   (bars || []).forEach(b => {
     const t = toUnix(b.time);
     if (t == null) return;
     const hasB = b.banked_balance != null && Number.isFinite(Number(b.banked_balance));
     const hasF = b.floating_pnl != null && Number.isFinite(Number(b.floating_pnl));
-    if (!hasB && !hasF && b.equity == null) return;
+    if (!hasB && !hasF) return;
     hasMetrics = true;
     const snap = {
       time: t,
@@ -1043,7 +911,6 @@ function updatePnLCharts(bars) {
     lastPnLByTime.set(t, snap);
     if (hasB) bankPts.push({ time: t, value: Number(b.banked_balance) });
     if (hasF) floatPts.push({ time: t, value: Number(b.floating_pnl) });
-    if (snap.equity != null && Number.isFinite(snap.equity)) eqPts.push({ time: t, value: snap.equity });
   });
   const emptyEl = $("pnlEmpty");
   const chartsEl = $("pnlCharts");
@@ -1053,50 +920,40 @@ function updatePnLCharts(bars) {
     updatePnLReadout(null);
     if (bankSeries) bankSeries.setData([]);
     if (floatSeries) floatSeries.setData([]);
-    if (equityFlowSeries) equityFlowSeries.setData([]);
     return;
   }
   if (emptyEl) emptyEl.style.display = "none";
   if (chartsEl) chartsEl.style.display = "";
   if (bankSeries) bankSeries.setData(bankPts);
   if (floatSeries) floatSeries.setData(floatPts);
-  if (equityFlowSeries) equityFlowSeries.setData(eqPts);
-  const lastT = bankPts.length ? bankPts[bankPts.length - 1].time
-    : (floatPts.length ? floatPts[floatPts.length - 1].time
-      : (eqPts.length ? eqPts[eqPts.length - 1].time : null));
-  updatePnLReadout(lastT != null ? lastPnLByTime.get(lastT) : null);
+  const lastT = bankPts.length ? bankPts[bankPts.length - 1].time : floatPts[floatPts.length - 1].time;
+  updatePnLReadout(lastPnLByTime.get(lastT));
 }
 
-function restoreTvUserView(candles) {
-  if (!chart || !candles.length) return;
-  if (!window.__onyxFitOnce) {
-    try { chart.timeScale().fitContent(); } catch (_) {}
-    window.__onyxFitOnce = true;
+function syncPnLFromTv(param) {
+  if (pnlSyncing || !chartReady) return;
+  if (!param || param.time == null) {
+    const last = [...lastPnLByTime.values()].pop();
+    updatePnLReadout(last || null);
+    if (bankChart) bankChart.clearCrosshairPosition();
+    if (floatChart) floatChart.clearCrosshairPosition();
     return;
   }
-  // Prefer the user's time window (UTC seconds). Logical ranges break when
-  // SL/candle series lengths change between polls.
-  if (tvUserTimeRange && tvUserTimeRange.from != null && tvUserTimeRange.to != null) {
-    try {
-      chart.timeScale().setVisibleRange({
-        from: tvUserTimeRange.from,
-        to: tvUserTimeRange.to,
-      });
-    } catch (_) {
-      try { chart.timeScale().fitContent(); } catch (__) {}
-    }
-  }
-  if (tvUserPriceRange && tvUserPriceRange.from != null && tvUserPriceRange.to != null) {
-    try {
-      chart.priceScale("right").applyOptions({ autoScale: false });
-      chart.priceScale("right").setVisibleRange({
-        from: tvUserPriceRange.from,
-        to: tvUserPriceRange.to,
-      });
-    } catch (_) {}
-  } else {
-    try { chart.priceScale("right").applyOptions({ autoScale: true }); } catch (_) {}
-  }
+  const snap = lastPnLByTime.get(param.time);
+  if (!snap) return;
+  pnlSyncing = true;
+  updatePnLReadout(snap);
+  if (bankChart && bankSeries) bankChart.setCrosshairPosition(undefined, param.time, bankSeries);
+  if (floatChart && floatSeries) floatChart.setCrosshairPosition(undefined, param.time, floatSeries);
+  pnlSyncing = false;
+}
+
+function syncPnLTimeRange(range) {
+  if (pnlSyncing || !range) return;
+  pnlSyncing = true;
+  if (bankChart) bankChart.timeScale().setVisibleLogicalRange(range);
+  if (floatChart) floatChart.timeScale().setVisibleLogicalRange(range);
+  pnlSyncing = false;
 }
 
 /** Build live-desk candles from the connected MT5 terminal's M15 snapshot. */
@@ -1299,16 +1156,12 @@ function enrichTradesWithLivePnl(trades, positions) {
     const closed = !!(t.close_time || t.exit_time || t.closed_at
       || String(t.status || "").toLowerCase() === "closed");
     let base = t;
-    if (t.open_time) {
-      const decisionUnix = decisionBarUnixFromFill(t.open_time);
-      const flooredFill = toBarUnix(t.open_time);
-      const stamped = toBarUnix(t.bar_time);
-      // Bridge used to stamp bar_time = floor(fill) (= next candle). Always
-      // rewrite that to the decision candle so arrows sit on the right bar.
-      if (decisionUnix != null && (stamped == null || stamped === flooredFill || stamped !== decisionUnix)) {
+    if (!t.bar_time && t.open_time) {
+      const bu = toBarUnix(t.open_time);
+      if (bu != null) {
         base = {
           ...t,
-          bar_time: new Date(decisionUnix * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          bar_time: new Date(bu * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
         };
       }
     }
@@ -1326,8 +1179,7 @@ function enrichTradesWithLivePnl(trades, positions) {
 }
 
 /**
- * Entry arrow time: on the engine decision candle (bar_time), not the broker
- * fill clock. Closed-bar fills often land at the open of the next M15.
+ * Entry arrow time: locked to the fill candle for that ticket.
  * Never uses trade.time / close_time / last bar (those made arrows jump).
  */
 function markerTimeForTrade(trade, candles) {
@@ -1335,25 +1187,16 @@ function markerTimeForTrade(trade, candles) {
     trade.position_id || trade.ticket || trade.position || ""
   ).trim();
   const series = candles || [];
-  // Prefer fill→decision mapping over stored bar_time (legacy stamps used
-  // floor(open_time) = next M15 after closed-bar execution).
-  let anchorUnix = null;
-  if (trade.open_time) {
-    anchorUnix = decisionBarUnixFromFill(trade.open_time);
-  }
-  if (anchorUnix == null) {
-    anchorUnix = toBarUnix(trade.bar_time);
-  }
-  if (anchorUnix == null) return null;
   if (ticketKey && markerAnchorByTicket.has(ticketKey)) {
     const locked = markerAnchorByTicket.get(ticketKey);
-    // Keep lock only when it already matches the decision candle.
-    if (locked === anchorUnix) {
-      const stillThere = resolveMarkerOnCandles(locked, series);
-      if (stillThere != null) return stillThere;
-    }
+    const stillThere = resolveMarkerOnCandles(locked, series);
+    if (stillThere != null) return stillThere;
   }
-  const resolved = resolveMarkerOnCandles(anchorUnix, series);
+  // open_time / bar_time only — never heartbeat "time" fields.
+  const fillRaw = trade.open_time || trade.bar_time || null;
+  const fillUnix = toUnix(fillRaw);
+  if (fillUnix == null) return null;
+  const resolved = resolveMarkerOnCandles(fillUnix, series);
   if (resolved != null && ticketKey) markerAnchorByTicket.set(ticketKey, resolved);
   return resolved;
 }
@@ -1418,124 +1261,138 @@ function updateTv(bars, trades, currentBar, positions, pending) {
     slDedup.push(p);
   });
   try {
-    // Clip Trail SL to the candle time span so orphan Sep-8 SL points cannot
-    // stretch the time axis and break left/right pan after zoom.
-    const tMin = candles.length ? candles[0].time : null;
-    const tMax = candles.length ? candles[candles.length - 1].time : null;
-    const slClipped = (tMin != null && tMax != null)
-      ? slDedup.filter((p) => p.time >= tMin && p.time <= tMax)
-      : slDedup;
-
-    candleSeries.setData(candles);
-    xtSeries.setData(xt);
-    histSeries.setData(hist);
-    if (slSeries) slSeries.setData(slClipped);
+  const keepRange = chart.timeScale().getVisibleLogicalRange();
+  const keepPrice = chart.priceScale("right").getVisibleRange && chart.priceScale("right").getVisibleRange();
+  candleSeries.setData(candles);
+  xtSeries.setData(xt);
+  histSeries.setData(hist);
+    if (slSeries) slSeries.setData(slDedup);
     const el = $("tvChart");
     if (chart && el && el.clientWidth > 0) {
       chart.applyOptions({ width: el.clientWidth, height: Math.max(el.clientHeight, 520) });
     }
-    restoreTvUserView(candles);
+    if (candles.length && !window.__onyxFitOnce) {
+      chart.timeScale().fitContent();
+      window.__onyxFitOnce = true;
+    } else if (keepRange && candles.length) {
+      // Keep user's left/right scroll while live data refreshes.
+      try { chart.timeScale().setVisibleLogicalRange(keepRange); } catch (_) {}
+    }
+    if (keepPrice && keepPrice.from != null && keepPrice.to != null && window.__onyxFitOnce) {
+      // Keep user's up/down price zoom after first fit.
+      try {
+        chart.priceScale("right").applyOptions({ autoScale: false });
+        chart.priceScale("right").setVisibleRange(keepPrice);
+      } catch (_) {}
+    }
   } catch (e) {
     console.error("chart setData", e, { candles: candles.length, xt: xt.length, hist: hist.length, sl: slDedup.length });
   }
 
   const markers = [];
-  const seenTicketKeys = new Set();
-  const grouped = new Map(); // tOpen|BUY|SELL -> items
-  const noteTrade = (tr, fallbackLabel) => {
+  const seenMarkerKeys = new Set();
+  const tradeTicketKeys = new Set();
+  const pushEntryMarker = (tr, fallbackLabel) => {
     if (!tr) return;
     const kind = String(tr.kind || fallbackLabel || "").toUpperCase();
+    // Allow blank kind for open MT5 positions — still show an arrow.
     if (kind && kind !== "PRIMARY" && kind !== "SUPP" && kind !== "BUY" && kind !== "SELL") return;
-    const ticketKey = String(tr.position_id || tr.ticket || tr.position || "").trim();
-    if (ticketKey && seenTicketKeys.has(ticketKey)) return;
+    const ticketKey = String(
+      tr.position_id || tr.ticket || tr.position || ""
+    ).trim();
+    // Anchor against the candles actually drawn — orphan times jump to neighbors.
     const tOpen = markerTimeForTrade(tr, candles);
     if (tOpen == null) return;
     const sideRaw = String(tr.side || tr.type || tr.position_side || "").toUpperCase();
     const isBuy = sideRaw === "BUY" || sideRaw === "0" || Number(tr.type) === 0;
     const isSupp = kind === "SUPP" || fallbackLabel === "S" || fallbackLabel === "SUPP";
-    if (ticketKey) seenTicketKeys.add(ticketKey);
+    const soft = `${tOpen}|${isBuy ? "BUY" : "SELL"}|${isSupp ? "SUPP" : "PRIMARY"}`;
+    if (ticketKey && seenMarkerKeys.has("t:" + ticketKey)) return;
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    if (ticketKey) {
+      seenMarkerKeys.add("t:" + ticketKey);
+      tradeTicketKeys.add(ticketKey);
+    }
+    seenMarkerKeys.add("s:" + soft);
     const pnl = (tr.profit == null || Number.isNaN(Number(tr.profit))) ? null : Number(tr.profit);
     const closed = !!(tr.close_time || tr.exit_time || tr.closed_at
       || String(tr.status || "").toLowerCase() === "closed");
-    const gkey = `${tOpen}|${isBuy ? "BUY" : "SELL"}`;
-    const rec = grouped.get(gkey) || { tOpen, isBuy, items: [] };
-    rec.items.push({
-      isSupp,
-      pnl: pnl != null ? Math.round(pnl * 100) / 100 : null,
-      closed,
-    });
-    grouped.set(gkey, rec);
-  };
-  (trades || []).forEach((tr) => noteTrade(tr));
-  (positions || []).forEach((p) => {
-    const ticketKey = String(p?.position_id || p?.ticket || p?.position || "").trim();
-    if (ticketKey && seenTicketKeys.has(ticketKey)) return;
-    noteTrade(p, p.kind || "PRIMARY");
-  });
-  grouped.forEach((rec) => {
-    const clock = markerClockLabel(rec.tOpen);
-    const bits = rec.items.map((it) => {
-      const name = it.isSupp ? "SUPP" : (rec.isBuy ? "BUY" : "SELL");
-      if (it.pnl == null) return name + (it.closed ? "" : " OPEN");
-      return name + (it.pnl >= 0 ? " +" : " ") + money(it.pnl) + (it.closed ? "" : " live");
-    });
-    const net = rec.items.reduce((s, it) => s + (it.pnl == null ? 0 : it.pnl), 0);
-    const anySupp = rec.items.some((it) => it.isSupp);
-    const color = anySupp
+    const showPnl = pnl != null;
+    const clock = markerClockLabel(tOpen);
+    // Round live float so the label doesn't jitter every heartbeat.
+    const pnlRounded = showPnl ? Math.round(pnl * 100) / 100 : null;
+    const pnlTxt = pnlRounded != null
+      ? ((pnlRounded >= 0 ? " +" : " ") + money(pnlRounded) + (closed ? "" : " live"))
+      : (closed ? "" : " OPEN");
+    const color = isSupp
       ? "#49a5ff"
-      : (net > 0 ? "#3ecf8e" : net < 0 ? "#ef6b6b" : (rec.isBuy ? "#3ecf8e" : "#ef6b6b"));
-    markers.push({
-      time: rec.tOpen,
-      position: rec.isBuy ? "belowBar" : "aboveBar",
+      : (pnlRounded != null ? (pnlRounded >= 0 ? "#3ecf8e" : "#ef6b6b") : (isBuy ? "#3ecf8e" : "#ef6b6b"));
+      markers.push({
+        time: tOpen,
+        position: isBuy ? "belowBar" : "aboveBar",
       color,
-      shape: rec.isBuy ? "arrowUp" : "arrowDown",
-      text: (clock ? clock + " " : "") + bits.join(" · "),
-    });
+        shape: isBuy ? "arrowUp" : "arrowDown",
+      text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + (clock ? (" " + clock) : "") + pnlTxt,
+      });
+  };
+  (trades || []).forEach(tr => {
+    pushEntryMarker(tr);
   });
-  // Engine decided a fill on this bar but MT5 has no ticket in the record.
+  // Open positions are often already in trades as status=open — do not double-draw.
+  (positions || []).forEach(p => {
+    const ticketKey = String(p?.position_id || p?.ticket || p?.position || "").trim();
+    if (ticketKey && tradeTicketKeys.has(ticketKey)) return;
+    if (ticketKey && seenMarkerKeys.has("t:" + ticketKey)) return;
+    pushEntryMarker(p, p.kind || "PRIMARY");
+  });
+  // Bars annotated PRIMARY/SUPP BUY|SELL — only if no trade marker already covers that bar.
   (lastBars || []).forEach((b) => {
     const act = String(b.action || b.filledAction || "").toUpperCase();
-    const isBuy = act === "BUY" || act === "BUY_ADD";
-    const isSell = act === "SELL" || act === "SELL_ADD";
-    if (!isBuy && !isSell) return;
+    const m = act.match(/\b(PRIMARY|SUPP)\s+(BUY|SELL)\b/);
+    if (!m) return;
     const tOpen = resolveMarkerOnCandles(toUnix(b.time), candles);
     if (tOpen == null) return;
-    const gkey = `${tOpen}|${isBuy ? "BUY" : "SELL"}`;
-    if (grouped.has(gkey)) return;
-    const isSupp = act.includes("ADD");
+    const isBuy = m[2] === "BUY";
+    const isSupp = m[1] === "SUPP";
+    const soft = `${tOpen}|${isBuy ? "BUY" : "SELL"}|${isSupp ? "SUPP" : "PRIMARY"}`;
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    // Prefer real fills over bar-annotation ghosts when any trade already marked.
+    if (tradeTicketKeys.size > 0) return;
+    seenMarkerKeys.add("s:" + soft);
+    const clock = markerClockLabel(tOpen);
     markers.push({
       time: tOpen,
       position: isBuy ? "belowBar" : "aboveBar",
       color: isSupp ? "#49a5ff" : (isBuy ? "#3ecf8e" : "#ef6b6b"),
       shape: isBuy ? "arrowUp" : "arrowDown",
-      text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + " " + markerClockLabel(tOpen) + " (engine)",
+      text: (isSupp ? "SUPP" : (isBuy ? "BUY" : "SELL")) + (clock ? (" " + clock) : ""),
     });
-    grouped.set(gkey, { tOpen, isBuy, items: [] });
   });
   const pendingAction = String((pending || {}).action || "").toUpperCase();
   if (pendingAction === "BUY_ADD" || pendingAction === "SELL_ADD") {
     const pendingTime = resolveMarkerOnCandles(toBarUnix((pending || {}).bar_time), candles);
-    const gkey = pendingTime == null ? "" : `${pendingTime}|${pendingAction === "BUY_ADD" ? "BUY" : "SELL"}`;
-    if (pendingTime != null && !grouped.has(gkey)) {
-      grouped.set(gkey, { tOpen: pendingTime, isBuy: pendingAction === "BUY_ADD", items: [] });
+    if (pendingTime != null) {
+      const soft = `${pendingTime}|${pendingAction === "BUY_ADD" ? "BUY" : "SELL"}|SUPP`;
+      if (!seenMarkerKeys.has("s:" + soft)) {
+        seenMarkerKeys.add("s:" + soft);
       markers.push({
         time: pendingTime,
         position: pendingAction === "BUY_ADD" ? "belowBar" : "aboveBar",
         color: "#49a5ff",
         shape: pendingAction === "BUY_ADD" ? "arrowUp" : "arrowDown",
-        text: "SUPP " + markerClockLabel(pendingTime),
+          text: "SUPP " + markerClockLabel(pendingTime),
       });
+      }
     }
   }
   // Deploy-skip candles: paint an X on the skipped entry bar.
-  const skipSeen = new Set();
   (lastBars || []).forEach((b) => {
     if (!b || !(b.deploy_skip === true || b.deploy_skip === 1 || b.deploy_skip === "true")) return;
     const tOpen = resolveMarkerOnCandles(toUnix(b.time), candles);
     if (tOpen == null) return;
     const soft = `${tOpen}|DEPLOY_SKIP`;
-    if (skipSeen.has(soft)) return;
-    skipSeen.add(soft);
+    if (seenMarkerKeys.has("s:" + soft)) return;
+    seenMarkerKeys.add("s:" + soft);
     markers.push({
       time: tOpen,
       position: "aboveBar",
@@ -1549,8 +1406,8 @@ function updateTv(bars, trades, currentBar, positions, pending) {
     const tOpen = resolveMarkerOnCandles(toUnix(skipFromAli), candles);
     if (tOpen != null) {
       const soft = `${tOpen}|DEPLOY_SKIP`;
-      if (!skipSeen.has(soft)) {
-        skipSeen.add(soft);
+      if (!seenMarkerKeys.has("s:" + soft)) {
+        seenMarkerKeys.add("s:" + soft);
         markers.push({
           time: tOpen,
           position: "aboveBar",
@@ -1574,6 +1431,7 @@ function updateTv(bars, trades, currentBar, positions, pending) {
   }
   showBarOhlc(currentBar || lastBars[lastBars.length - 1]);
   updatePnLCharts(lastBars);
+  syncPnLTimeRange(chart.timeScale().getVisibleLogicalRange());
 }
 
 function renderAnalysis(a, account) {
@@ -1740,15 +1598,7 @@ async function load() {
     const lastClosed = allBars.slice().reverse().find(x => !x.forming) || {};
     const bars = allBars;
     accountTrail = normalizeAccountTrail(b.equity_trail || []).filter((p) => p.time * 1000 >= barStartMs);
-    const recordedForPath = enrichTradesWithLivePnl(sessionTrades(b).filter((t) => {
-      const k = String(t.kind || "").toUpperCase();
-      return k === "PRIMARY" || k === "SUPP";
-    }), b.positions || []);
-    const barsWithMetrics = reconstructAccountPath(
-      attachBarMetrics(bars, accountTrail),
-      recordedForPath,
-      acct
-    );
+    const barsWithMetrics = attachBarMetrics(bars, accountTrail);
     $("mOH").textContent = current.raw_open != null
       ? ("RAW " + fmt(current.raw_open) + " / " + fmt(current.raw_high))
       : (current.open != null ? fmt(current.open) + " / " + fmt(current.high) : "—");
@@ -1765,10 +1615,6 @@ async function load() {
       : ((lastControls.TSL_TICKS || "—") + " ticks fixed");
     if ($("modeNote")) $("modeNote").textContent = bridge.engine_mode || (bridge.entry_every_candle === false ? "classic (amber-armed)" : "every candle");
     if ($("thNote")) $("thNote").textContent = String(bridge.hist_thresh != null ? bridge.hist_thresh : liveThresh());
-    if ($("thSuppNote")) $("thSuppNote").textContent = String(
-      bridge.hist_thresh_supp != null ? bridge.hist_thresh_supp
-        : (lastControls.HIST_THRESH_SUPP != null ? lastControls.HIST_THRESH_SUPP : liveSuppThresh())
-    );
     if ($("stopNote")) $("stopNote").textContent = atrMult > 0 ? (atrMult + " × ATR(14)") : ((lastControls.TSL_TICKS || 1111) + " ticks");
     if ($("ctrlSource")) {
       $("ctrlSource").textContent = lastControls.updated_at
@@ -1798,11 +1644,13 @@ async function load() {
       `<tr><td>${p.ticket}</td><td class="kind-${p.kind||'OTHER'}">${p.kind||"—"}</td><td class="${p.side==='BUY'?'buy':'sell'}">${p.side}</td><td>${fmt(p.volume,2)}</td><td>${fmt(p.price_open)}</td><td>${fmt(p.sl)}</td><td class="${p.profit>=0?'buy':'sell'}">${fmt(p.profit)}</td></tr>`
     ).join("") : `<tr><td colspan="7" class="muted">Flat</td></tr>`;
 
-    const trades = recordedForPath.filter(t => {
-      const ts = Date.parse(t.open_time || t.bar_time || t.time || t.close_time || "");
-      const barTs = Date.parse(t.bar_time || "");
-      return (Number.isFinite(ts) && ts >= barStartMs) || (Number.isFinite(barTs) && barTs >= barStartMs);
-    }).slice().reverse();
+    const trades = enrichTradesWithLivePnl(sessionTrades(b).filter(t => {
+      const k = String(t.kind || "").toUpperCase();
+      if (k !== "PRIMARY" && k !== "SUPP") return false;
+      const ts = Date.parse(t.open_time || t.time || t.close_time || "");
+      // Same M15 floor as candles so same-bar fills stay visible after a wipe.
+      return Number.isFinite(ts) && ts >= barStartMs;
+    }), pos).slice().reverse();
     lastTrades = trades;
     $("tradeBody").innerHTML = trades.length ? trades.map(t =>
       `<tr>
@@ -1867,24 +1715,21 @@ async function load() {
       `<tr><td>${h.ts||h.time||""}</td><td>${h.host||""}</td><td>${h.lab_action||""}</td><td>${h.bar_time||""}</td><td>${h.note||""}</td></tr>`
     ).join("") : `<tr><td colspan="5" class="muted">No heartbeats</td></tr>`;
 
-    // Raw deals: only realized close/exit fills (entry=1). Opening deals always
-    // print profit 0.0 and are not "made" trades — hide them from this table.
-    const deals = (b.orders || []).slice().reverse().filter(o => {
+    const deals = (b.orders || []).slice().reverse().slice(0, 80).filter(o => {
       const k = String(o.kind || "").toUpperCase();
-      if (k !== "PRIMARY" && k !== "SUPP") return false;
-      return Number(o.entry) === 1;
-    }).slice(0, 80);
+      return k === "PRIMARY" || k === "SUPP";
+    });
     $("dealBody").innerHTML = deals.length ? deals.map(o => {
       const kindLabel = String(o.kind || "").toUpperCase() === "SUPP" ? "SUPPLEMENTARY" : "PRIMARY";
-      const role = String(o.deal_role || "SL/EXIT").toUpperCase();
-      const shown = `${kindLabel} · ${role}`;
+      const role = String(o.deal_role || (Number(o.entry) === 1 ? "SL/EXIT" : "OPEN")).toUpperCase();
+      const shown = Number(o.entry) === 1 ? `${kindLabel} · ${role}` : kindLabel;
       return `<tr><td>${(o.time||"").replace("T"," ").slice(0,19)}</td><td>${o.side||""}</td><td>${o.entry}</td><td>${fmt(o.price)}</td><td class="${Number(o.profit)>=0?'buy':'sell'}">${fmt(o.profit)}</td><td class="kind-${o.kind||'PRIMARY'}">${shown}</td><td>${o.comment||""}</td></tr>`;
-    }).join("") : `<tr><td colspan="7" class="muted">No closed PRIMARY/SUPP deals yet</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">No PRIMARY/SUPP deals</td></tr>`;
     $("execBody").innerHTML = executionLog.length ? executionLog.slice().reverse().slice(0, 80).map(x =>
       `<tr><td>${(x.time||"").replace("T"," ").slice(0,19)}</td><td>${(x.bar_time||"").replace("T"," ").slice(0,19) || "—"}</td><td>${x.action||"NONE"}</td><td class="${x.ok ? "buy" : "sell"}">${x.ok ? "OK" : "FAILED"}</td><td>${(x.results||[]).map(y => `${y.ok ? "OK" : "FAIL"} ${y.retcode ?? ""} ${y.comment || y.error || ""}`).join("<br>") || "—"}</td><td>${x.note||""}</td></tr>`
     ).join("") : `<tr><td colspan="6" class="muted">No execution audit records</td></tr>`;
 
-    updateTv(barsWithMetrics, trades, barsWithMetrics[barsWithMetrics.length - 1] || current, pos, {
+    updateTv(barsWithMetrics, trades, attachBarMetrics([current], accountTrail)[0] || current, pos, {
       action: bridge.pending_action,
       bar_time: bridge.pending_bar_time,
     });
@@ -1911,11 +1756,8 @@ $("btnReset").onclick = resetSession;
 $("btnFit").onclick = () => {
   if (!chart) return;
   try {
-    tvUserTimeRange = null;
-    tvUserPriceRange = null;
     chart.priceScale("right").applyOptions({ autoScale: true });
     chart.timeScale().fitContent();
-    window.__onyxFitOnce = true;
   } catch (_) {}
 };
 
@@ -2176,7 +2018,7 @@ $("tabExec").onclick = () => {
 
 const CTRL_KEYS = [
   "VOLUME","TSL_TICKS","TSL_TICK_SIZE","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
-  "BEST_LOT_MULT","HIST_THRESH","HIST_THRESH_SUPP","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
+  "BEST_LOT_MULT","HIST_THRESH","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
   "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
 ];
 const BOOL_CTRL_KEYS = new Set([
