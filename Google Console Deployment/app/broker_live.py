@@ -16,7 +16,7 @@ MAX_ITEMS = 512
 # live desk freezes (was ~1.6MB/poll with equity_trail + decision_records).
 UI_EQUITY_TRAIL = 480
 UI_HEARTBEATS = 80
-UI_ORDERS = 120
+UI_ORDERS = 400
 UI_SL_TRAIL = 240
 UI_BARS = 240
 UI_OHLC = 240

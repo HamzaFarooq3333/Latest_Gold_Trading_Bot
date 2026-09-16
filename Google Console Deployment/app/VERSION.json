@@ -1,9 +1,9 @@
 {
-    "version": "ali-pc-fresh-2026-09-16",
-    "built_utc": "2026-09-15T19:35:00Z",
+    "version": "ali-pc-desk-trades-equity-2026-09-16",
+    "built_utc": "2026-09-16T11:20:00Z",
     "engine": "Primary HIST_THRESH=10 (buy>=+10 / sell<=-10). Supplementary/stack HIST_THRESH_SUPP=18 (buy>=+18 / sell<=-18). ENTRY_EVERY_CANDLE stack adds also require supp hist gate. Trailing stop ATR or ticks from env/desk controls.",
     "live_desk": "https://35.253.21.246",
-    "notes": "Fresh-start tip for Ali detect: hist 10/18, flatten command, TV-like equity pan charts. Apply candle-safe on Ali PC.",
+    "notes": "Desk: show all recorded tickets on chart, rebuild banked/float/equity from trade path, independent chart pan. Tip bump for Ali detect.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",
