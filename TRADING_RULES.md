@@ -16,7 +16,7 @@
 | `hist = EMA(WilderRSI(raw close, 3), 5) âˆ’ 50` | colour |
 | X-Trend = **KJ GagaTrend on HA** (`XTREND_SOURCE=gaga`) | clearance gate |
 
-Colour (`HIST_THRESH`, live **15**): green `hist â‰¥ +15`, red `hist â‰¤ âˆ’15`, amber between.
+Colour (`HIST_THRESH`, live **10**): green `hist ≥ +10`, red `hist â‰¤ âˆ’15`, amber between.
 The bridge colours each bar with the live threshold and the engine trusts that colour.
 
 ## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=0`)
@@ -80,7 +80,7 @@ Every entry is bound to its MT5 position ticket. Each poll the bridge drops engi
 
 ## Lessons kept (do not repeat)
 
-1. **A hard-coded histogram threshold in the bridge** coloured bars at 10 while `.env` said 15 â€” every tunable is now read live from the environment (`effective_*`), including `hist_color`.
+1. **A hard-coded histogram threshold in the bridge** coloured bars now match `.env` HIST_THRESH=10 â€” every tunable is now read live from the environment (`effective_*`), including `hist_color`.
 2. **Trailing the bar extreme** put stops on the wrong side of the market and inflated backtests 25Ã—; trail the **close**.
 3. **Sending the run's active stop with a stacked add** made the broker close the add before the engine knew â€” each ticket sends its own `fill_sl`.
 4. **Partial close by nearest entry** could close a different live ticket â€” match by ticket, and treat "no matching ticket" as already closed by the broker.

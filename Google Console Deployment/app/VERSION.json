@@ -1,9 +1,9 @@
 {
-    "version": "ali-rollback-8a0f905-maxsupp10-2026-09-16",
-    "built_utc": "2026-09-16T17:35:00Z",
-    "engine": "Rollback to Ali pin 8a0f905 (2026-09-13) + MAX_SUPP=10 classic SUPP (ENTRY_EVERY_CANDLE=0). HIST_THRESH=15 from Ali pin.",
+    "version": "ali-rollback-hist10-maxsupp10-2026-09-16",
+    "built_utc": "2026-09-16T17:40:00Z",
+    "engine": "Ali pin 8a0f905 base + MAX_SUPP=10 classic SUPP + HIST_THRESH=10 (green>=+10 / red<=-10). One hist gate for colour, primary, and SUPP.",
     "live_desk": "https://35.253.21.246",
-    "notes": "Hamza: wipe desk, flatten, restore Ali known-good tree from GitHub pin, allow up to 10 supplementary trades. Tip bump so Ali PC detects+applies.",
+    "notes": "Set hist threshold to ±10. No separate HIST_THRESH_SUPP on this rollback engine — primary and secondary share HIST_THRESH=10.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",
