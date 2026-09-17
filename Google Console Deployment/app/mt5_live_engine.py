@@ -79,6 +79,26 @@ def effective_hist_thresh() -> float:
     return _env_float("HIST_THRESH", 10.0)
 
 
+def effective_hist_entry_thresh() -> float:
+    """Entry strength gate for primary AND supplementary (buy >= +TH, sell <= -TH).
+
+    Colour can still turn green/red at HIST_THRESH (default 10); trades only fire
+    when |hist| reaches this higher floor (default 15).
+    """
+    return _env_float("HIST_ENTRY_THRESH", 15.0)
+
+
+def entry_hist_ok(hist: float, want: int) -> bool:
+    """True when histogram magnitude is strong enough to open/add on this side."""
+    th = effective_hist_entry_thresh()
+    h = float(hist)
+    if want > 0:
+        return h >= th
+    if want < 0:
+        return h <= -th
+    return False
+
+
 def effective_maxpos() -> int:
     return max(1, _env_int("MAXPOS", 20))
 
@@ -311,6 +331,9 @@ def explain_decision(code: str, *, action: str = "NONE", zone: str = "",
         "SKIP_SUPPLEMENTARY_NO_TRADE_WICK": "No SUPP - no last-trade wick level stored yet.",
         "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE": "No SUPP - this candle did not break the last trade candle's wick.",
         "SKIP_SUPPLEMENTARY_XTREND_GATE": f"No SUPP - candle touches X-Trend ({xt_s}) and XTREND_GATE_SUPP is ON.",
+        "SKIP_ENTRY_HIST_THRESH": (
+            f"No trade - hist {hist_s} is coloured but below entry threshold "
+            f"(need |hist| >= {effective_hist_entry_thresh():g})."),
         "SKIP_OPPOSITE_SIDE_OPEN": (
             f"No entry - hist {hist_s} ({z}) is the opposite colour to the open run; wait for amber."),
         "REJECTED_LOCAL_RISK_OR_MAXPOS": "No trade - blocked by margin/risk or max open positions.",
@@ -812,7 +835,7 @@ class LatestModsEngine:
                         self._advance_best(p, ec, self.pos)
                 # Classic mode: at most one new ticket per bar - a SUPP on the
                 # raw wick break of the last trade candle.
-                if (not every and zz == self.pos
+                if (not every and zz == self.pos and entry_hist_ok(hist, self.pos)
                         and self._entry_ok(eh, el, xtrend, self.pos, self.break_level, False)):
                     if not hour_allowed(hour, self.skip_worst_hours):
                         self.hour_skips += 1
@@ -823,10 +846,13 @@ class LatestModsEngine:
                         if pa in ("BUY_ADD", "SELL_ADD"):
                             action = filled_action = pa
                             just_opened.append(self.positions[-1])
+                elif (not every and zz == self.pos and not entry_hist_ok(hist, self.pos)
+                      and self._entry_ok(eh, el, xtrend, self.pos, self.break_level, False)):
+                    self.last_entry_reason = "SKIP_ENTRY_HIST_THRESH"
 
         # 2. Classic mode: flat but the run is still alive - re-enter as SUPP.
         if (not every and not just_opened and not self.positions and self.run_side != 0
-                and zz == self.run_side
+                and zz == self.run_side and entry_hist_ok(hist, self.run_side)
                 and self._entry_ok(eh, el, xtrend, self.run_side, self.break_level, False)):
             if not hour_allowed(hour, self.skip_worst_hours):
                 self.hour_skips += 1
@@ -837,6 +863,10 @@ class LatestModsEngine:
                 if pa in ("BUY_ADD", "SELL_ADD"):
                     action = filled_action = pa
                     just_opened.append(self.positions[-1])
+        elif (not every and not just_opened and not self.positions and self.run_side != 0
+              and zz == self.run_side and not entry_hist_ok(hist, self.run_side)
+              and self._entry_ok(eh, el, xtrend, self.run_side, self.break_level, False)):
+            self.last_entry_reason = "SKIP_ENTRY_HIST_THRESH"
 
         # 3. Amber ends the run whatever mode we are in.
         if zz == 0:
@@ -850,7 +880,9 @@ class LatestModsEngine:
             want = zz
             can_try = (self._n_total() == 0 or self.pos == zz) if every else (
                 self._n_total() == 0 and self.run_side == 0 and self.seen_amber)
-            if can_try and self._entry_ok(h, l, xtrend, want, None, True):
+            if can_try and not entry_hist_ok(hist, want):
+                self.last_entry_reason = "SKIP_ENTRY_HIST_THRESH"
+            elif can_try and self._entry_ok(h, l, xtrend, want, None, True):
                 if not hour_allowed(hour, self.skip_worst_hours):
                     self.hour_skips += 1
                     self.last_entry_reason = f"SKIP_WORST_HOUR_{hour}"
@@ -939,6 +971,7 @@ class LatestModsEngine:
             "weekend_skips": self.weekend_skips, "skip_weekends": effective_skip_weekends(),
             "mode": self._mode_label(),
             "entry_every_candle": every, "hist_thresh": effective_hist_thresh(),
+            "hist_entry_thresh": effective_hist_entry_thresh(),
             "tsl_mode": "atr" if effective_tsl_atr_mult() > 0 else "ticks",
             "tsl_atr_mult": effective_tsl_atr_mult(), "atr": round(float(self._atr), 4),
             "tsl_ticks": effective_tsl_ticks(), "tsl_tick_size": effective_tick_size(),

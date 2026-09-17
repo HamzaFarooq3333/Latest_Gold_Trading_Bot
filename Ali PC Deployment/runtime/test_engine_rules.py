@@ -15,13 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mt5_live_engine as eng  # noqa: E402
 
 LIVE_ENV = {
-    "ENTRY_EVERY_CANDLE": "0", "TSL_ATR_MULT": "1.25", "HIST_THRESH": "10", "MAX_SUPP": "10",
+    "ENTRY_EVERY_CANDLE": "0", "TSL_ATR_MULT": "1.25", "HIST_THRESH": "10",
+    "HIST_ENTRY_THRESH": "15", "MAX_SUPP": "10",
     "MAXPOS": "20", "VOLUME": "0.02", "XTREND_GATE": "1", "XTREND_BUF": "0", "SKIP_WEEKENDS": "0",
     "TRAIL_EVERY_CANDLE": "1", "TRAIL_ENTRY_BAR": "1", "ENTRY_BAR_MODE": "defer",
     "DISABLE_STOP_LOSS": "0", "STOP_SLIPPAGE_PTS": "0", "SPREAD_COST": "0.06",
     "TSL_TICKS": "1111", "TSL_TICK_SIZE": "0.001",
 }
-CLASSIC_ENV = {**LIVE_ENV, "ENTRY_EVERY_CANDLE": "0", "MAX_SUPP": "2", "TSL_ATR_MULT": "0", "HIST_THRESH": "10"}
+CLASSIC_ENV = {**LIVE_ENV, "ENTRY_EVERY_CANDLE": "0", "MAX_SUPP": "2", "TSL_ATR_MULT": "0", "HIST_THRESH": "10", "HIST_ENTRY_THRESH": "15"}
 
 
 def set_env(values: dict) -> None:
@@ -55,10 +56,13 @@ class _Feed:
 
 class EveryCandleTests(unittest.TestCase):
     def setUp(self):
-        set_env(LIVE_ENV)
+        set_env({**LIVE_ENV, "ENTRY_EVERY_CANDLE": "1"})
         self.e = eng.LatestModsEngine()
         self.e.balance = 2000.0
         self.f = _Feed(self.e).warm()
+
+    def tearDown(self):
+        set_env(LIVE_ENV)
 
     def test_atr_warm_and_stop_sized_from_atr(self):
         self.assertGreaterEqual(self.e._atr_n, 14)
@@ -137,6 +141,7 @@ class EveryCandleTests(unittest.TestCase):
 class LiveControlTests(unittest.TestCase):
     def test_threshold_and_volume_are_read_live(self):
         set_env(LIVE_ENV)
+        os.environ["HIST_THRESH"] = "15"
         self.assertEqual(eng.zone(12.0), 0)
         os.environ["HIST_THRESH"] = "10"
         self.assertEqual(eng.zone(12.0), 1)
@@ -146,8 +151,17 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(eng.effective_maxpos(), 3)
         set_env(LIVE_ENV)
 
+    def test_colour_at_10_but_entry_needs_15(self):
+        set_env(LIVE_ENV)
+        self.assertEqual(eng.zone(12.0), 1)                 # green at colour thresh 10
+        self.assertFalse(eng.entry_hist_ok(12.0, 1))        # but no trade yet
+        self.assertTrue(eng.entry_hist_ok(15.0, 1))
+        self.assertTrue(eng.entry_hist_ok(-15.0, -1))
+        self.assertFalse(eng.entry_hist_ok(-12.0, -1))
+        set_env(LIVE_ENV)
+
     def test_maxpos_caps_the_stack(self):
-        set_env({**LIVE_ENV, "MAXPOS": "2"})
+        set_env({**LIVE_ENV, "MAXPOS": "2", "ENTRY_EVERY_CANDLE": "1"})
         e = eng.LatestModsEngine()
         e.balance = 2000.0
         f = _Feed(e).warm()
@@ -157,6 +171,35 @@ class LiveControlTests(unittest.TestCase):
         self.assertEqual(len(e.positions), 2)
         self.assertEqual(r["decision_reason"], "REJECTED_LOCAL_RISK_OR_MAXPOS")
         set_env(LIVE_ENV)
+
+
+class EntryHistGateTests(unittest.TestCase):
+    def setUp(self):
+        set_env(CLASSIC_ENV)
+        self.e = eng.LatestModsEngine()
+        self.e.balance = 2000.0
+        self.f = _Feed(self.e).warm()
+
+    def tearDown(self):
+        set_env(LIVE_ENV)
+
+    def test_weak_green_does_not_open_primary(self):
+        # hist=12 is green at colour 10, but below entry floor 15
+        r = self.f.bar(4003, 4010, 4002.5, 4008, 3990, 12.0, "green")
+        self.assertIsNone(r["filled_action"])
+        self.assertEqual(r["decision_reason"], "SKIP_ENTRY_HIST_THRESH")
+        self.assertEqual(len(self.e.positions), 0)
+
+    def test_strong_green_opens_primary(self):
+        r = self.f.bar(4003, 4010, 4002.5, 4008, 3990, 15.0, "green")
+        self.assertEqual(r["filled_action"], "BUY")
+
+    def test_weak_green_blocks_supp_after_primary(self):
+        self.f.bar(4003, 4010, 4002.5, 4008, 3990, 20.0, "green")
+        r = self.f.bar(4008, 4012, 4007, 4011, 3990, 12.0, "green")
+        self.assertIsNone(r["filled_action"])
+        self.assertEqual(r["decision_reason"], "SKIP_ENTRY_HIST_THRESH")
+        self.assertEqual(self.e._n_supp(), 0)
 
 
 class ClassicModeTests(unittest.TestCase):

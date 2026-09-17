@@ -16,7 +16,8 @@
 | `hist = EMA(WilderRSI(raw close, 3), 5) âˆ’ 50` | colour |
 | X-Trend = **KJ GagaTrend on HA** (`XTREND_SOURCE=gaga`) | clearance gate |
 
-Colour (`HIST_THRESH`, live **10**): green `hist >= +10`, red `hist <= -10`, amber between.
+Colour (HIST_THRESH, live **10**): green `hist >= +10`, red `hist <= -10`, amber between.
+Entry strength (HIST_ENTRY_THRESH, live **15**): primary and SUPP only when `hist >= +15` (buy) or `hist <= -15` (sell). Colour can be green/red from ±10 without taking a trade until ±15.
 The bridge colours each bar with the live threshold and the engine trusts that colour.
 
 ## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=0`)

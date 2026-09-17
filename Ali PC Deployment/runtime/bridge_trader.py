@@ -195,7 +195,7 @@ def build_cfg(env: dict) -> dict:
 
 # Desk controls the bridge honours. Anything else the desk sends is ignored.
 LIVE_CONTROL_KEYS = (
-    "VOLUME", "HIST_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
+    "VOLUME", "HIST_THRESH", "HIST_ENTRY_THRESH", "ENTRY_EVERY_CANDLE", "TSL_ATR_MULT",
     "TSL_TICKS", "TSL_TICK_SIZE", "TSL_PTS", "BROKER_MIN_STOP_PTS",
     "STOP_SLIPPAGE_PTS", "SPREAD_COST", "TRAIL_EVERY_CANDLE", "TRAIL_ENTRY_BAR",
     "ENTRY_BAR_MODE", "DISABLE_STOP_LOSS", "MAXPOS", "MAX_SUPP", "BEST_LOT_MULT",
@@ -543,6 +543,22 @@ def enrich_deal_kinds(orders: list[dict]) -> list[dict]:
     return orders
 
 
+def decision_bar_time_from_fill(open_time) -> str | None:
+    """Map an MT5 fill clock back to the closed M15 the engine decided on.
+
+    Example: fill 09:00:04 → decision bar 08:45:00Z (not 09:00).
+    """
+    ot = _parse_bar_ts(open_time)
+    if ot is None:
+        return None
+    floored = int(ot // 900) * 900
+    # Fills in the first 3 minutes of a bar are almost always the previous
+    # candle's closed-bar entry (bridge runs right after the M15 close).
+    if (ot - floored) <= 180:
+        floored -= 900
+    return datetime.fromtimestamp(floored, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
     """Pair DEAL_ENTRY_IN / OUT by position_id into PRIMARY/SUPP round-trips."""
     by_pos: dict = {}
@@ -572,7 +588,9 @@ def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
         }
         ot = _parse_bar_ts(op.get("time"))
         if ot is not None:
-            tr["bar_time"] = datetime.fromtimestamp(int(ot // 900) * 900, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Closed-bar fills land in the first seconds of the *next* M15.
+            # Stamp the engine decision candle (previous bar), not the fill clock.
+            tr["bar_time"] = decision_bar_time_from_fill(op.get("time"))
         if closes:
             cl = closes[-1]
             comment = cl.get("comment") or ""

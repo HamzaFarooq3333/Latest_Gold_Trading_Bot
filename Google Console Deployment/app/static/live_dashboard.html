@@ -405,7 +405,8 @@
       <label class="metric"><div class="lbl">MAXPOS</div><input id="cMAXPOS" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">MAX_SUPP</div><input id="cMAX_SUPP" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">BEST_LOT_MULT</div><input id="cBEST_LOT_MULT" type="number" step="0.1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
-      <label class="metric"><div class="lbl">HIST_THRESH</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_THRESH (colour ±)</div><input id="cHIST_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
+      <label class="metric"><div class="lbl">HIST_ENTRY_THRESH (trade ±)</div><input id="cHIST_ENTRY_THRESH" type="number" step="1" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem"></label>
       <label class="metric"><div class="lbl">ENTRY_EVERY_CANDLE</div>
         <select id="cENTRY_EVERY_CANDLE" style="width:100%;background:#0b1220;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem">
           <option value="true">true — stack on every candle (live)</option>
@@ -599,7 +600,7 @@ let lastControls = {};
 // Histogram colour threshold for bars the bridge did not colour (matches the live control).
 function liveThresh() {
   const t = Number(lastControls.HIST_THRESH);
-  return Number.isFinite(t) && t > 0 ? t : 15;
+  return Number.isFinite(t) && t > 0 ? t : 10;
 }
 let chart, candleSeries, xtSeries, histSeries, slSeries, eqChart, eqSeries;
 let bankChart, floatChart, bankSeries, floatSeries;
@@ -1147,6 +1148,18 @@ function snapMarkerTime(unixSec, bars) {
   return null;
 }
 
+function decisionBarUnixFromFill(openTime) {
+  const t = toUnix(openTime);
+  if (t == null) return null;
+  const secIntoBar = t % 900;
+  // Closed-bar fills usually land in the first seconds of the *next* M15.
+  // Map those back onto the decision candle (previous bar open).
+  if (secIntoBar <= 180) {
+    return t - secIntoBar - 900;
+  }
+  return t - secIntoBar;
+}
+
 function enrichTradesWithLivePnl(trades, positions) {
   const byTicket = new Map();
   for (const p of positions || []) {
@@ -1157,12 +1170,16 @@ function enrichTradesWithLivePnl(trades, positions) {
     const closed = !!(t.close_time || t.exit_time || t.closed_at
       || String(t.status || "").toLowerCase() === "closed");
     let base = t;
-    if (!t.bar_time && t.open_time) {
-      const bu = toBarUnix(t.open_time);
-      if (bu != null) {
+    if (t.open_time) {
+      const decisionUnix = decisionBarUnixFromFill(t.open_time);
+      const flooredFill = toBarUnix(t.open_time);
+      const stamped = toBarUnix(t.bar_time);
+      // Bridge used to stamp bar_time = floor(fill) (= next candle). Always
+      // rewrite that to the decision candle so arrows sit on the right bar.
+      if (decisionUnix != null && (stamped == null || stamped === flooredFill || stamped !== decisionUnix)) {
         base = {
           ...t,
-          bar_time: new Date(bu * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+          bar_time: new Date(decisionUnix * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
         };
       }
     }
@@ -1180,24 +1197,33 @@ function enrichTradesWithLivePnl(trades, positions) {
 }
 
 /**
- * Entry arrow time: locked to the fill candle for that ticket.
- * Never uses trade.time / close_time / last bar (those made arrows jump).
+ * Entry arrow time: on the engine decision candle, not the broker fill clock.
+ * Closed-bar fills often land at the open of the next M15.
  */
 function markerTimeForTrade(trade, candles) {
   const ticketKey = String(
     trade.position_id || trade.ticket || trade.position || ""
   ).trim();
   const series = candles || [];
+  // Prefer fill→decision mapping over stored bar_time (legacy stamps used
+  // floor(open_time) = next M15 after closed-bar execution).
+  let anchorUnix = null;
+  if (trade.open_time) {
+    anchorUnix = decisionBarUnixFromFill(trade.open_time);
+  }
+  if (anchorUnix == null) {
+    anchorUnix = toBarUnix(trade.bar_time);
+  }
+  if (anchorUnix == null) return null;
   if (ticketKey && markerAnchorByTicket.has(ticketKey)) {
     const locked = markerAnchorByTicket.get(ticketKey);
-    const stillThere = resolveMarkerOnCandles(locked, series);
-    if (stillThere != null) return stillThere;
+    // Keep lock only when it already matches the decision candle.
+    if (locked === anchorUnix) {
+      const stillThere = resolveMarkerOnCandles(locked, series);
+      if (stillThere != null) return stillThere;
+    }
   }
-  // open_time / bar_time only — never heartbeat "time" fields.
-  const fillRaw = trade.open_time || trade.bar_time || null;
-  const fillUnix = toUnix(fillRaw);
-  if (fillUnix == null) return null;
-  const resolved = resolveMarkerOnCandles(fillUnix, series);
+  const resolved = resolveMarkerOnCandles(anchorUnix, series);
   if (resolved != null && ticketKey) markerAnchorByTicket.set(ticketKey, resolved);
   return resolved;
 }
@@ -2019,7 +2045,7 @@ $("tabExec").onclick = () => {
 
 const CTRL_KEYS = [
   "VOLUME","TSL_TICKS","TSL_TICK_SIZE","TSL_PTS","STOP_SLIPPAGE_PTS","SPREAD_COST","MAXPOS","MAX_SUPP",
-  "BEST_LOT_MULT","HIST_THRESH","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
+  "BEST_LOT_MULT","HIST_THRESH","HIST_ENTRY_THRESH","ENTRY_EVERY_CANDLE","TSL_ATR_MULT","XTREND_SOURCE",
   "TRAIL_EVERY_CANDLE","TRAIL_ENTRY_BAR","DISABLE_STOP_LOSS","XTREND_GATE","XTREND_GATE_SUPP"
 ];
 const BOOL_CTRL_KEYS = new Set([

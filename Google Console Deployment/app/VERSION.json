@@ -1,13 +1,12 @@
-﻿{
-    "version":  "desk-wipe-sticky-session-2026-09-17",
-    "built_utc":  "2026-09-17T04:35:00Z",
-    "engine":  "Ali pin 8a0f905 base + MAX_SUPP=10 classic SUPP + HIST_THRESH=10 (green\u003e=+10 / red\u003c=-10). One hist gate for colour, primary, and SUPP.",
-    "live_desk":  "https://35.253.21.246",
-    "notes":  "Sticky session wipe: no session clock =\u003e hide all old MT5 trades; UI no longer falls back to 7-day history.",
-    "gitops":  {
-                   "source_of_truth":  "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
-                   "agent":  "github_update_agent.py",
-                   "desk_redeploy":  "Hamza office watcher (watch_latest_desk_deploy.ps1) on any push",
-                   "rollback_pin":  "8a0f905c2ffde6b733e53f1b73cfaf5150a471d8"
-               }
+{
+    "version": "hist-entry15-colour10-decision-arrows-2026-09-17",
+    "built_utc": "2026-09-17T04:45:00Z",
+    "engine": "Colour HIST_THRESH=10 (green>=+10/red<=-10). Primary+SUPP entries need HIST_ENTRY_THRESH=15. Trade arrows on decision candle not next-bar fill.",
+    "live_desk": "https://35.253.21.246",
+    "notes": "Decouple hist colour from entry strength; restore decision-candle arrow mapping.",
+    "gitops": {
+        "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
+        "agent": "github_update_agent.py",
+        "desk_redeploy": "Hamza office watcher on any push"
+    }
 }
