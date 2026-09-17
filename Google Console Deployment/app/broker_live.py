@@ -155,8 +155,11 @@ def _parse_ts(ts) -> datetime | None:
 
 
 def _after_session(items: list, cutoff: datetime | None, keys: tuple[str, ...] = ("time", "open_time", "close_time", "ts")) -> list:
+    # No session clock = show nothing. Returning the full MT5 dump when
+    # session_started_at is missing is what brought Sep 15 trades back after
+    # GCP redeploys wiped the wipe marker.
     if cutoff is None:
-        return list(items or [])
+        return []
     out = []
     for item in items or []:
         stamp = None
@@ -168,6 +171,17 @@ def _after_session(items: list, cutoff: datetime | None, keys: tuple[str, ...] =
         if stamp is None or stamp >= cutoff or bool(item.get("forming")):
             out.append(item)
     return out
+
+
+def _ensure_session_clock(broker: dict) -> datetime:
+    """Keep a wipe clock forever. If missing (redeploy / fresh store), start NOW."""
+    cutoff = _parse_ts(broker.get("session_started_at"))
+    if cutoff is not None:
+        return cutoff
+    now = _now()
+    broker["session_started_at"] = now
+    broker["note"] = broker.get("note") or "session auto-started (no prior wipe clock)"
+    return _parse_ts(now) or datetime.now(timezone.utc)
 
 
 def _session_bar_cutoff(cutoff: datetime | None) -> datetime | None:
@@ -299,7 +313,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                 else:
                     broker[key] = body[key]
         broker["positions"] = _trim(broker.get("positions"))
-        cutoff = _parse_ts(broker.get("session_started_at"))
+        cutoff = _ensure_session_clock(broker)
         bar_cutoff = _session_bar_cutoff(cutoff)
         # Trades/orders use the exact wipe clock so a reset truly zeros P/L and
         # old fills on the current M15 bar cannot reappear via bridge history.
@@ -611,7 +625,8 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
         broker["ali_pc"] = ali
         broker.setdefault("ali_pc_commands", [])
         # Re-apply exact session wipe on read so stale bridge history cannot linger in the UI.
-        cutoff = _parse_ts(broker.get("session_started_at"))
+        had_session = bool(broker.get("session_started_at"))
+        cutoff = _ensure_session_clock(broker)
         if cutoff is not None:
             broker["trades"] = [
                 t
@@ -643,6 +658,9 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
             broker["trade_history"] = list(broker.get("trades") or [])
         broker["trades"] = _ensure_trade_bar_times(broker.get("trades") or [])
         broker["trade_history"] = _ensure_trade_bar_times(broker.get("trade_history") or [])
+        if not had_session:
+            store["broker_live"] = broker
+            lab.save_store(model_name, store)
         return response(
             200,
             {

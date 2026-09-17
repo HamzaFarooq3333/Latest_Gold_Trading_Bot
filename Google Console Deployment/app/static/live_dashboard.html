@@ -781,7 +781,8 @@ function initCharts() {
 }
 
 // Session window: after desk wipe / bridge fresh start, only show this session.
-// Falls back to "now - 7 days" if session_started_at is missing.
+// If session_started_at is missing, use NOW (never fall back to 7 days — that
+// resurfaced Sep 15 trades after GCP redeploys cleared the wipe clock).
 function historyStartMs(broker) {
   const fromBroker = Date.parse(broker?.session_started_at || "");
   if (Number.isFinite(fromBroker)) {
@@ -789,7 +790,7 @@ function historyStartMs(broker) {
     return fromBroker;
   }
   if (sessionStartMs != null) return sessionStartMs;
-  sessionStartMs = Date.now() - 7 * 24 * 3600 * 1000;
+  sessionStartMs = Date.now();
   return sessionStartMs;
 }
 
