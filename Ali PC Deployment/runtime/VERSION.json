@@ -1,12 +1,13 @@
 {
-    "version": "ha-candles-all-rules-2026-09-20",
-    "built_utc": "2026-09-20T18:30:00Z",
-    "engine": "Raw MT5 bars are converted to Heikin-Ashi and EVERY rule runs on the HA candle: body break, X-Trend, SUPP wick (body or wick crosses last-trade wick), fill level, stop test, trailing, ATR. Raw OHLC is record-only. Histogram stays on real close (matches the MQ5 indicator).",
-    "live_desk": "https://35.253.21.246",
-    "notes": "Dashboards draw HA candles only. engine_mode in bridge_status.json is computed fresh each write. Status file rename retries on WinError 5.",
-    "gitops": {
-        "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
-        "agent": "github_update_agent.py",
-        "desk_redeploy": "Hamza office watcher on any push"
-    }
+  "version": "leverage-1-200-2026-09-20",
+  "built_utc": "2026-09-20T18:20:00Z",
+  "desk_deployed_utc": "2026-09-20T18:27:56Z",
+  "engine": "HA all rules; LEVERAGE 200",
+  "live_desk": "https://35.253.21.246",
+  "notes": "Leverage 1:200. Desk shows leverage + last GitHub apply time.",
+  "gitops": {
+    "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
+    "agent": "github_update_agent.py",
+    "desk_redeploy": "Hamza office watcher on any push"
+  }
 }
