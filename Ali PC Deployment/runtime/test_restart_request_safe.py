@@ -8,6 +8,15 @@ from unittest import mock
 
 AGENT = Path(__file__).resolve().parent / "github_update_agent.py"
 
+# Point the agent at a scratch root BEFORE it is imported: with its default
+# (C:\onyxion-ali) every log() call these tests trigger lands in the LIVE
+# github_update_agent.log and looks like a real restart request.
+import os as _os, tempfile as _tempfile
+_TEST_ROOT = _tempfile.mkdtemp(prefix="onyxion-agent-test-")
+for _sub in ("logs", "state"):
+    _os.makedirs(_os.path.join(_TEST_ROOT, _sub), exist_ok=True)
+_os.environ["MT5_ROOT"] = _TEST_ROOT
+
 
 def _load():
     spec = importlib.util.spec_from_file_location("github_agent_restart", AGENT)
