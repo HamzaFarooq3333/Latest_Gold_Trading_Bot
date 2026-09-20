@@ -964,7 +964,8 @@ function barsFromMt5(bars) {
   for (const r of bars || []) {
     const time = String(r.time || "").trim();
     if (!time) continue;
-    // Prefer raw broker OHLC for the chart; fall back to HA / open fields.
+    // The chart draws the Heikin-Ashi candle the rules run on; raw broker
+    // OHLC is kept on the bar for the audit tables and the tooltip.
     const rawO = firstFinite(r.raw_open, r.open, r.ha_open);
     const rawH = firstFinite(r.raw_high, r.high, r.ha_high);
     const rawL = firstFinite(r.raw_low, r.low, r.ha_low);
@@ -997,8 +998,8 @@ function barsFromMt5(bars) {
       ? (/\bx-?trend|xt\b/i.test(why) ? "XT touching" : /\bweekend\b/i.test(why) ? "weekend" : /\bhour\b/i.test(why) ? "hour filter" : /\bamber\b/i.test(why) ? "amber arm" : /\bbody\b/i.test(why) ? "body gate" : "strategy skip")
       : "";
     // Sanitize candle geometry so Lightweight Charts never rejects the series.
-    const hi = Math.max(rawO, rawH, rawL, rawC);
-    const lo = Math.min(rawO, rawH, rawL, rawC);
+    const hi = Math.max(haO, haH, haL, haC);
+    const lo = Math.min(haO, haH, haL, haC);
     by.set(time, {
       time,
       open: haO,
@@ -1009,10 +1010,10 @@ function barsFromMt5(bars) {
       raw_high: rawH,
       raw_low: rawL,
       raw_close: rawC,
-      chart_open: rawO,
+      chart_open: haO,
       chart_high: hi,
       chart_low: lo,
-      chart_close: rawC,
+      chart_close: haC,
       candle_type: r.candle_type || "HA",
       xtrend,
       hist: hv,
@@ -1626,12 +1627,11 @@ async function load() {
     const bars = allBars;
     accountTrail = normalizeAccountTrail(b.equity_trail || []).filter((p) => p.time * 1000 >= barStartMs);
     const barsWithMetrics = attachBarMetrics(bars, accountTrail);
-    $("mOH").textContent = current.raw_open != null
-      ? ("RAW " + fmt(current.raw_open) + " / " + fmt(current.raw_high))
-      : (current.open != null ? fmt(current.open) + " / " + fmt(current.high) : "—");
-    $("mLC").textContent = current.raw_low != null
-      ? ("RAW " + fmt(current.raw_low) + " / " + fmt(current.raw_close))
-      : (current.low != null ? fmt(current.low) + " / " + fmt(current.close) : "—");
+    // Heikin-Ashi values: the candle every rule, fill and stop is computed on.
+    $("mOH").textContent = current.open != null
+      ? ("HA " + fmt(current.open) + " / " + fmt(current.high)) : "—";
+    $("mLC").textContent = current.low != null
+      ? ("HA " + fmt(current.low) + " / " + fmt(current.close)) : "—";
     $("mXt").textContent = fmt(current.xtrend) + (b.xtrend_source || bridge.xtrend_source ? (" · " + (b.xtrend_source || bridge.xtrend_source)) : "");
     $("mEngineSl").textContent = fmt(bridge.engine_sl);
     $("mLiveLot").textContent = fmt(bridge.lot != null ? bridge.lot : (b.controls || {}).VOLUME, 2);

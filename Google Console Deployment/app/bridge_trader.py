@@ -8,7 +8,10 @@ executes on the Exness demo account.
 Per poll (MT5_POLL_SECONDS, default 2 s):
   1. pull the desk's live controls (only applied once someone saved them)
   2. reconcile the engine's tickets with what the broker actually holds
-  3. feed every newly closed M15 bar to mt5_live_engine.LatestModsEngine
+  3. feed every newly closed M15 bar to mt5_live_engine.LatestModsEngine.
+     The raw MT5 bar is converted to a Heikin-Ashi candle here (collect_bars)
+     and EVERY rule - gates, fills, stops, ATR - runs on that HA candle; the
+     raw bar travels alongside for the desk's record tables only.
   4. translate the engine result into MT5 orders (entry / stop modify /
      partial close / flatten) and retry a failed leg safely
   5. POST a full snapshot (account, positions, trades, bars, decisions) to the
@@ -883,12 +886,27 @@ def write_local_status(cfg: dict, snapshot: dict, heartbeat_ok: bool) -> None:
             "n_positions": len(snapshot.get("positions") or []),
             "pending_bar_time": bridge.get("pending_bar_time"),
             "heartbeat_ok": bool(heartbeat_ok),
-            "lot": bridge.get("lot"), "engine_mode": bridge.get("engine_mode"),
+            # Fresh from current env, not the last processed bar's cached
+            # label - otherwise this reads stale over a weekend/quiet spell
+            # even though the running process's mode never actually changed.
+            "lot": bridge.get("lot"), "engine_mode": mt5_live_engine.current_mode_label(),
             "live_controls_source": bridge.get("live_controls_source"),
         }
         tmp = STATE_DIR / (STATUS_FILE_NAME + ".tmp")
         tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-        os.replace(tmp, STATE_DIR / STATUS_FILE_NAME)
+        # On Windows the rename fails with "Access is denied" (WinError 5)
+        # while another process has the target open for reading - CHECK_BOT,
+        # the GitHub agent, the desk panel poll. It clears in milliseconds,
+        # so retry briefly instead of dropping the whole status write.
+        last_exc: Exception | None = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp, STATE_DIR / STATUS_FILE_NAME)
+                return
+            except PermissionError as exc:
+                last_exc = exc
+                time.sleep(0.05 * (attempt + 1))
+        raise last_exc if last_exc else RuntimeError("status replace failed")
     except Exception as exc:
         log(f"local status write failed: {exc}")
 
@@ -1470,7 +1488,8 @@ def reconcile_with_broker(engine: Mt5LiveEngine, runtime: dict, symbol: str, mag
     broker = positions_for_magic(symbol, magic)
     alive = {int(p.ticket) for p in broker}
     tick = mt5.symbol_info_tick(symbol)
-    mark = float(eng._prev_raw_close or 0.0)
+    # Fallback mark is the last REAL close, not the HA close the rules use.
+    mark = float(eng.last_raw_close or 0.0)
     if tick is not None and tick.bid and tick.ask:
         mark = (float(tick.bid) + float(tick.ask)) / 2.0
     dropped = eng.reconcile(alive, mark)

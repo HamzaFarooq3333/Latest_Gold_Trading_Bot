@@ -909,17 +909,17 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:100   ·   Block add if margin l
             <label>Entry mode</label>
             <select id="btEntryMode" style="min-width:320px">
               <option value="every" selected>Every candle — primary gate on each green/red bar, tickets stack (live)</option>
-              <option value="classic">Classic — amber arms, one primary per run, SUPP on last-trade wick</option>
+              <option value="classic">Classic — amber arms, one primary per run, SUPP when the next HA candle's body or wick crosses the last-trade wick</option>
             </select>
           </div>
           <div class="row"><label>hist threshold</label><input id="btHistThresh" type="number" step="0.5" min="0" value="15" /><span class="hint">green ≥ +TH · red ≤ −TH · amber between (live 15)</span></div>
           <div class="row">
             <label>Entry fill</label>
             <select id="btFillMode" style="min-width:320px">
-              <option value="body" selected>Previous body level (break price; walk-forward reports)</option>
-              <option value="close">Bar close — market price when the closed bar is processed (live-like)</option>
+              <option value="body" selected>Previous HA body level (break price; walk-forward reports)</option>
+              <option value="close">HA bar close — closest to live, where the market order goes out when the bar closes</option>
             </select>
-            <span class="hint">Live fills at the ask/bid when the bar closes, not at the break level, so "bar close" is the pessimistic, live-like choice.</span>
+            <span class="hint">Every rule, fill, stop and the ATR run on the Heikin-Ashi candle (raw MT5 bars are converted first). Live fills at the real ask/bid when the bar closes, so "HA bar close" is the pessimistic, live-like choice.</span>
           </div>
           <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="2000" /></div>
           <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="100" /></div>
@@ -1092,8 +1092,7 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:100   ·   Block add if margin l
             <input id="btTvDate" type="date" style="min-width:160px" />
             <label>candles</label>
             <select id="btChartOhlc" style="min-width:220px">
-              <option value="raw" selected>Raw MT5 (execution / P/L)</option>
-              <option value="ha">Heikin Ashi (signal only)</option>
+              <option value="ha" selected>Heikin Ashi (rules, fills, stops, P/L)</option>
             </select>
             <button class="action" id="btnBtTvGo">Go to date</button>
             <button class="secondary" id="btnBtTvPrevDay" title="Previous day">← day</button>
@@ -3302,7 +3301,7 @@ Short is the mirror.</div>
     }
     /** KJ GagaTrend on HA high/low/close (same family as Ali live XTREND_SOURCE=gaga). */
     function btGagaTrendHa(rows) {
-      const useRaw = rows.length && rows[0].executionSource === "raw OHLC"
+      const useRaw = rows.length && rows[0].executionSource === "HA from raw MT5"
         && rows.every(r => Number.isFinite(r.rawOpen));
       let h, l, c;
       if (useRaw) {
@@ -3446,7 +3445,7 @@ Short is the mirror.</div>
           xtrend: Number.isFinite(xt) ? xt : null,
           fileXtrend: Number.isFinite(xt) ? xt : null,
           rawOpen: ro, rawHigh: rh, rawLow: rl, rawClose: rc,
-          executionSource: hasRaw ? "raw OHLC" : "signal OHLC fallback"
+          executionSource: hasRaw ? "HA from raw MT5" : "HA from file (no raw)"
         });
       }
       rows.sort((a, b) => a.t - b.t);
@@ -3560,12 +3559,13 @@ Short is the mirror.</div>
       const maxSupp = cfg.maxSupp || 10;
       const everyCandle = cfg.entryEveryCandle === true;
       const atrMult = Number.isFinite(+cfg.tslAtrMult) ? Math.max(0, +cfg.tslAtrMult) : 0;
-      // Wilder ATR(14) on raw bars, seeded like the engine (mean of the first 14 true ranges).
+      // Wilder ATR(14) on the HA bars (open/high/low/close are HA here), seeded
+      // like the engine (mean of the first 14 true ranges).
       const atr = new Array(n).fill(0);
       for (let i = 0; i < n; i++) {
         const b = bars[i];
-        const tr = i === 0 ? b.rawHigh - b.rawLow
-          : Math.max(b.rawHigh - b.rawLow, Math.abs(b.rawHigh - bars[i - 1].rawClose), Math.abs(b.rawLow - bars[i - 1].rawClose));
+        const tr = i === 0 ? b.high - b.low
+          : Math.max(b.high - b.low, Math.abs(b.high - bars[i - 1].close), Math.abs(b.low - bars[i - 1].close));
         atr[i] = i < 14 ? ((atr[i - 1] || 0) * i + tr) / (i + 1) : atr[i - 1] + (tr - atr[i - 1]) / 14;
       }
       // Stop distance for a ticket opened on bar i: ATR-sized once 14 bars are in, else the fixed tick distance.
@@ -3658,35 +3658,40 @@ Short is the mirror.</div>
         return want > 0 ? b.high > Math.max(prev.open, prev.close) : b.low < Math.min(prev.open, prev.close);
       };
       const fillAtClose = cfg.fillMode === "close";
+      // Fill level on the HA candle: previous HA body, or this HA open on a gap.
+      // (Live fills at the real ask/bid; this is the backtest convention.)
       const crossFill = (b, prev, want) => {
-        if (fillAtClose) return b.rawClose;
+        if (fillAtClose) return b.close;
         if (want > 0) {
           const lvl = Math.max(prev.open, prev.close);
-          if (b.rawOpen > lvl) return b.rawOpen;
-          if (Math.abs(b.rawLow - b.rawOpen) < 1e-9 && b.rawOpen < lvl - tslFillPts) return b.rawOpen;
+          if (b.open > lvl) return b.open;
+          if (Math.abs(b.low - b.open) < 1e-9 && b.open < lvl - tslFillPts) return b.open;
           return lvl;
         }
         const lvl = Math.min(prev.open, prev.close);
-        if (b.rawOpen < lvl) return b.rawOpen;
-        if (Math.abs(b.rawHigh - b.rawOpen) < 1e-9 && b.rawOpen > lvl + tslFillPts) return b.rawOpen;
+        if (b.open < lvl) return b.open;
+        if (Math.abs(b.high - b.open) < 1e-9 && b.open > lvl + tslFillPts) return b.open;
         return lvl;
       };
       // Whole candle, wick included, must sit clear of the X-Trend band (PRIMARY only).
       const xtClear = (b, want) => want > 0
         ? b.low > b.xtrend + xtBuf
         : b.high < b.xtrend - xtBuf;
+      // SUPP rule (Ali, 2026-09-20): this HA candle's body OR wick crosses the
+      // wick of the candle the last trade was taken on. The HA high already
+      // contains the body top, so one comparison covers both. (Until 2026-09-20
+      // this used the raw wick because HA wicks fired too often against the old
+      // fixed 0.25 stop; stops are ATR-sized on HA bars now.)
       const brokeWick = (b, level, want) => {
         if (level == null || !Number.isFinite(Number(level))) return false;
-        // RAW wick — HA prints a new high almost every bar in a trend, which
-        // fired a SUPP at the HA extreme and then died on the raw 0.25 stop.
-        return want > 0 ? b.rawHigh > level : b.rawLow < level;
+        return want > 0 ? b.high > level : b.low < level;
       };
       const wickFill = (b, level, want) => {
         const lvl = Number(level);
-        if (want > 0) return b.rawOpen > lvl ? b.rawOpen : lvl;
-        return b.rawOpen < lvl ? b.rawOpen : lvl;
+        if (want > 0) return b.open > lvl ? b.open : lvl;
+        return b.open < lvl ? b.open : lvl;
       };
-      const tradeWick = (b, want) => want > 0 ? b.rawHigh : b.rawLow;
+      const tradeWick = (b, want) => want > 0 ? b.high : b.low;
       // Primary: prev-body break + X-Trend clear. SUPP: last-trade wick break only (no XT).
       const entryOkPrimary = (b, prev, want) => {
         if (!brokePrevBody(b, prev, want)) return false;
@@ -3704,7 +3709,7 @@ Short is the mirror.</div>
         const keep0 = [];
         for (const p of positions) {
           if (p.openedI === i) { keep0.push(p); continue; }
-          const hit = side > 0 ? b.rawLow <= p.sl : b.rawHigh >= p.sl;
+          const hit = side > 0 ? b.low <= p.sl : b.high >= p.sl;  // HA wick vs stop
           const slippedStop = side > 0 ? p.sl - stopSlip : p.sl + stopSlip;
           // Match live engine: fill at slipped stop only (no gap-open worse fill).
           const stopFill = slippedStop;
@@ -3728,7 +3733,7 @@ Short is the mirror.</div>
 
       for (let i = 1; i < n; i++) {
         if (!alive) break;
-        const b = bars[i], prev = bars[i - 1], px = b.rawClose, zz = b.zone;
+        const b = bars[i], prev = bars[i - 1], px = b.close, zz = b.zone;  // HA close trails / marks
         const lot = lotFor(b.t);
         let barFlatReason = null;
         bars[i].sl = null;
@@ -3745,7 +3750,7 @@ Short is the mirror.</div>
 
         if (zz === 0) { pending = null; seenAmber = true; }
         if (pending) {
-          doOpen(i, pending.want, pending.isPrimary, b.rawOpen, pending.lot, pending.sigBl, pending.sigI);
+          doOpen(i, pending.want, pending.isPrimary, b.open, pending.lot, pending.sigBl, pending.sigI);
           captureSlActive();
           pending = null;
         }
@@ -3846,12 +3851,12 @@ Short is the mirror.</div>
 
         equity.push({ t: b.t, time: b.time, equity: bal + floating(px), banked: bal, floating: floating(px) });
       }
-      if (positions.length) flatten(n - 1, bars[n - 1].rawClose, "eod");
+      if (positions.length) flatten(n - 1, bars[n - 1].close, "eod");
       const suppClosed = closed.filter(x => x.isSupp);
       return {
         closed, fills, equity, alive, bal, adds, blocked, xtSkip, hourSkip,
         start: cfg.start, xtGate, xtBuf, skipWorst, focusBest, priWick, stopSlip,
-        executionSource: bars.some(b => b.executionSource === "raw OHLC") ? "raw OHLC" : "signal OHLC fallback",
+        executionSource: bars.some(b => b.executionSource === "HA from raw MT5") ? "HA from raw MT5" : "HA from file (no raw)",
         everyCandle, atrMult, histThresh: btTh(),
         mode: (everyCandle ? "every_candle" : "classic_amber_supp") + "__" + (atrMult > 0 ? "atr" + atrMult : "ticks" + tslTicks)
           + (xtGate ? "__xt" + xtBuf : "__noxt") + (fillAtClose ? "__fill_close" : "__fill_body"),
@@ -4457,15 +4462,15 @@ Short is the mirror.</div>
           }
         } else {
           const wickLvl = snap.breakLevel;
-          const wickPx = buy ? bar.rawHigh : bar.rawLow;
+          const wickPx = buy ? bar.high : bar.low;  // HA wick (contains the body)
           const wickOk = wickLvl != null && Number.isFinite(Number(wickLvl))
             && Number.isFinite(Number(wickPx))
             && (buy ? Number(wickPx) > Number(wickLvl) : Number(wickPx) < Number(wickLvl));
-          add("trade_wick_break", `Last-trade RAW wick break (${buy ? "buy" : "sell"})`, wickOk,
+          add("trade_wick_break", `Last-trade HA wick crossed by body or wick (${buy ? "buy" : "sell"})`, wickOk,
             wickLvl == null || !Number.isFinite(Number(wickLvl))
               ? "no last-trade wick level"
               : (wickOk
-                ? `raw ${buy ? "high" : "low"} broke last-trade wick ${btFmt(wickLvl, 2)}`
+                ? `HA ${buy ? "high" : "low"} crossed last-trade wick ${btFmt(wickLvl, 2)}`
                 : `raw ${buy ? "high" : "low"} ${btFmt(wickPx, 2)} did not break wick ${btFmt(wickLvl, 2)}`));
           if (cfg.xtGateSupp) {
             const geom = btXtGapDetail(bar, xtBuf);
@@ -4581,11 +4586,11 @@ Short is the mirror.</div>
       return [
         ["time", (bar.time || "").replace("T", " ").replace("Z", "")],
         ["HA open / high / low / close", [bar.open, bar.high, bar.low, bar.close].map(v => btFmt(v, 2)).join(" · ")],
-        ["HA body", btFmt(haBody, 2) + " pt (signal candle — not the fill)"],
+        ["HA body", btFmt(haBody, 2) + " pt (rules, fills, stops and P/L run on this candle)"],
         ["raw open / high / low / close", hasRaw
           ? [bar.rawOpen, bar.rawHigh, bar.rawLow, bar.rawClose].map(v => btFmt(v, 2)).join(" · ")
-          : "same as HA (no separate execution OHLC)"],
-        ["raw body", hasRaw ? (btFmt(rawBody, 2) + " pt (this is what P/L is calculated on)") : "—"],
+          : "same as HA (no separate raw OHLC in the file)"],
+        ["raw body", hasRaw ? (btFmt(rawBody, 2) + " pt (record only — no rule reads the raw bar)") : "—"],
         ["SL (bar open)", slOpen + (slSide !== "—" ? " · " + slSide : "")],
         ["SL (after trail)", slTrail],
         ["X-Trend", btFmt(bar.xtrend, 2)],
@@ -4923,14 +4928,11 @@ Short is the mirror.</div>
       const next = days[Math.max(0, Math.min(days.length - 1, i + dir))];
       btGoTvDate(next);
     }
-    function btChartOhlcMode() {
-      const el = $("btChartOhlc");
-      return el && el.value === "ha" ? "ha" : "raw";
-    }
+    // The chart draws the Heikin-Ashi candle only - the candle every rule,
+    // fill and stop is computed on. Raw MT5 OHLC stays in the bar tooltip
+    // and the audit tables for reference.
+    function btChartOhlcMode() { return "ha"; }
     function btChartOhlc(b) {
-      if (btChartOhlcMode() !== "ha" && Number.isFinite(b.rawOpen)) {
-        return { open: b.rawOpen, high: b.rawHigh, low: b.rawLow, close: b.rawClose };
-      }
       return { open: b.open, high: b.high, low: b.low, close: b.close };
     }
     function btRenderTv() {

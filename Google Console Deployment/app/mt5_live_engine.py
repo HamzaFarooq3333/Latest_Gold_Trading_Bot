@@ -8,11 +8,21 @@ Deployment/app) must stay byte-identical.
 
 Inputs per bar
 --------------
-  signal OHLC   Heikin-Ashi candle (histogram, body-break and X-Trend gates)
-  raw OHLC      broker candle (fills, stops, ATR)
-  hist          EMA(WilderRSI(raw close, 3), 5) - 50
+  signal OHLC   Heikin-Ashi candle built by the bridge from the raw broker
+                bar. EVERY candle rule runs on it: body-break and X-Trend
+                gates, SUPP wick break, fill level, stop test, trailing, ATR.
+  raw OHLC      the broker candle it was built from. Carried through for the
+                record / audit tables and the reconcile mark price only - it
+                never drives a decision (changed 2026-09-20 at Ali's request;
+                before that fills, stops and ATR ran on the raw candle).
+  hist          EMA(WilderRSI(raw close, 3), 5) - 50. Deliberately the real
+                close: it must match the OnyxionHistogram MQ5 indicator on
+                the MT5 chart, which is TradingView's QQE on real close.
   histcolor     green / red / orange as coloured by the bridge (HIST_THRESH)
   xtrend        X-Trend line value (KJ GagaTrend on HA for Ali)
+
+Live fills are still the real ask/bid the bridge passes in execution_prices;
+only the backtest / lab fill convention (no live quote) uses the HA level.
 
 Two entry modes (ENTRY_EVERY_CANDLE)
 ------------------------------------
@@ -21,13 +31,14 @@ Two entry modes (ENTRY_EVERY_CANDLE)
             candle. Each pass opens its own ticket, stacking in the run
             direction up to MAXPOS. No amber arming, no supplementary logic.
   0         Classic rules: amber must appear first, one primary per colour
-            run, then supplementary tickets on a raw wick break of the last
-            trade candle (MAX_SUPP).
+            run, then supplementary tickets when the next candle's body or
+            wick crosses the wick of the candle the last trade was taken on
+            (HA high for buys / HA low for sells), up to MAX_SUPP.
 
 Exits (both modes)
 ------------------
-  * per-ticket trailing stop that ratchets to each bar CLOSE, sized as
-    TSL_ATR_MULT x Wilder ATR(14) of raw bars at entry (fixed for the trade),
+  * per-ticket trailing stop that ratchets to each HA bar CLOSE, sized as
+    TSL_ATR_MULT x Wilder ATR(14) of HA bars at entry (fixed for the trade),
     or TSL_TICKS x TSL_TICK_SIZE when the multiplier is 0
   * amber/orange histogram flattens everything and resets the run
   * margin stop-out below 50%
@@ -164,7 +175,7 @@ def tsl_distance() -> float:
 
 
 def effective_tsl_atr_mult() -> float:
-    """Stop = mult x Wilder ATR(14) of raw M15 bars at entry, fixed per trade.
+    """Stop = mult x Wilder ATR(14) of HA M15 bars at entry, fixed per trade.
 
     A fixed tick distance only works while volatility stays where it was
     tuned; the walk-forward test rewarded the ratio, not the dollar figure.
@@ -175,6 +186,20 @@ def effective_tsl_atr_mult() -> float:
 
 def effective_every_candle() -> bool:
     return _env_flag("ENTRY_EVERY_CANDLE", "0")
+
+
+def current_mode_label() -> str:
+    """Engine mode string from the CURRENT env, not from a cached bar result.
+
+    LatestModsEngine._mode_label() (used inside push()) only runs when a new
+    bar is processed, so a status field built from an old push() result keeps
+    showing whatever mode was active at that last bar - stale over a weekend
+    or any other gap, even though the running process's env never changed.
+    Call this instead whenever you need "what would the engine do right now".
+    """
+    entry = "every_candle" if effective_every_candle() else "classic_amber_supp"
+    stop = f"atr{effective_tsl_atr_mult():g}" if effective_tsl_atr_mult() > 0 else f"ticks{effective_tsl_ticks():g}"
+    return f"{entry}__{stop}"
 
 
 def effective_trail_every_candle() -> bool:
@@ -382,8 +407,10 @@ class LatestModsEngine:
     positions        open tickets, oldest first (the primary is index 0 while alive)
     run_side         classic mode: side of the primary taken this colour run
     seen_amber       classic mode: amber seen since the last primary (arms the next one)
-    break_level      classic mode: raw wick of the last trade candle (SUPP trigger)
+    break_level      classic mode: HA wick of the last trade candle (SUPP trigger)
     prev_*           previous HA candle (body-break gate and primary fill level)
+    last_raw_close   real broker close of the last bar - the bridge's fallback
+                     mark price when reconciling; never used by a rule
     """
 
     def __init__(self):
@@ -411,7 +438,8 @@ class LatestModsEngine:
         self.xt_skips = 0
         self.weekend_skips = 0
         self._last_fill_lot = effective_volume()
-        self._atr, self._atr_n, self._prev_raw_close = 0.0, 0, None
+        self._atr, self._atr_n, self._atr_prev_close = 0.0, 0, None
+        self.last_raw_close: float | None = None
         self.last_execution_source = "not_seen"
         self.last_entry_reason: str | None = None
         self._seen_bars: OrderedDict[str, dict] = OrderedDict()
@@ -431,7 +459,8 @@ class LatestModsEngine:
             "weekend_skips": self.weekend_skips,
             "last_fill_lot": self._last_fill_lot,
             "atr": float(self._atr), "atr_n": int(self._atr_n),
-            "prev_raw_close": self._prev_raw_close,
+            "atr_prev_close": self._atr_prev_close,
+            "last_raw_close": self.last_raw_close,
             "last_execution_source": self.last_execution_source,
             "seen_bars": list(self._seen_bars.items()),
         }
@@ -461,7 +490,11 @@ class LatestModsEngine:
         self._last_fill_lot = float(data.get("last_fill_lot", effective_volume()))
         self._atr = float(data.get("atr") or 0.0)
         self._atr_n = int(data.get("atr_n") or 0)
-        self._prev_raw_close = data.get("prev_raw_close")
+        # "prev_raw_close" is the key snapshots wrote before 2026-09-20 (raw close).
+        apc = data.get("atr_prev_close", data.get("prev_raw_close"))
+        self._atr_prev_close = None if apc is None else float(apc)
+        lrc = data.get("last_raw_close")
+        self.last_raw_close = None if lrc is None else float(lrc)
         self.last_execution_source = str(data.get("last_execution_source") or "not_seen")
         self._seen_bars = OrderedDict(data.get("seen_bars") or [])
         while len(self._seen_bars) > MAX_SEEN_BARS:
@@ -534,15 +567,15 @@ class LatestModsEngine:
         return eq - self._used(px) >= need + fee
 
     def _update_atr(self, eh: float, el: float, ec: float) -> None:
-        """Wilder ATR(14) on raw bars; snapshotted so ATR stops survive a restart."""
-        prev_c = self._prev_raw_close
+        """Wilder ATR(14) on HA bars; snapshotted so ATR stops survive a restart."""
+        prev_c = self._atr_prev_close
         tr = (eh - el) if prev_c is None else max(eh - el, abs(eh - prev_c), abs(el - prev_c))
         if self._atr_n < ATR_PERIOD:
             self._atr = (self._atr * self._atr_n + tr) / (self._atr_n + 1)
         else:
             self._atr += (tr - self._atr) / ATR_PERIOD
         self._atr_n += 1
-        self._prev_raw_close = ec
+        self._atr_prev_close = ec
 
     def _trade_tsl(self) -> float:
         """Stop distance for a ticket opened now: ATR-sized if enabled and warmed."""
@@ -610,7 +643,7 @@ class LatestModsEngine:
         return l < body_low(self.prev_open, self.prev_close)
 
     def _cross_fill(self, want: int, eo: float, eh: float, el: float) -> float:
-        """Primary fill: the previous body level, or this raw open if it gapped through."""
+        """Primary fill: the previous HA body level, or this HA open if it gapped through."""
         tol = effective_tsl_pts()
         if want > 0:
             lvl = body_high(self.prev_open, self.prev_close)
@@ -636,6 +669,10 @@ class LatestModsEngine:
         if level is None:
             self.last_entry_reason = "SKIP_SUPPLEMENTARY_NO_TRADE_WICK"
             return False
+        # SUPP rule: this candle's body OR wick crosses the wick of the candle
+        # the last trade was taken on. The HA high already contains the body
+        # top (high >= max(open, close)), so "high > level" is exactly
+        # "body or wick crossed" - one comparison covers both.
         broke = h > float(level) if want > 0 else l < float(level)
         if not broke:
             self.last_entry_reason = "SKIP_SUPPLEMENTARY_TRADE_WICK_GATE"
@@ -742,10 +779,10 @@ class LatestModsEngine:
     def _entry_execution_price(want: int, execution_prices: dict | None) -> float | None:
         """Live ask/bid at the moment the closed bar is processed, or None.
 
-        None makes the open helpers fill at the previous-body break level (or
-        the raw open on a gap) - the backtest convention the desk tester and
-        the walk-forward reports use. The old fallback returned the raw open,
-        so lab/backtest fills silently differed from every other backtest.
+        None makes the open helpers fill at the previous HA body break level
+        (or this HA open on a gap) - the backtest convention the desk tester
+        and the walk-forward reports use. Live always has a quote, so a real
+        trade is filled at the real ask/bid, never at an HA level.
         """
         if not execution_prices:
             return None
@@ -789,8 +826,14 @@ class LatestModsEngine:
             })
 
         has_raw = all(v is not None for v in raw_values)
-        self.last_execution_source = "raw_ohlc" if has_raw else "signal_ohlc_fallback"
-        eo, eh, el, ec = (float(raw_open), float(raw_high), float(raw_low), float(raw_close)) if has_raw else (o, h, l, c)
+        # Every decision - gates, fill level, stop test, trailing, ATR - runs on
+        # the Heikin-Ashi candle. The raw broker bar is kept for the record and
+        # as the reconcile mark only. Live fills still come from the real quote
+        # in execution_prices, so nothing is ever "traded at an HA price".
+        self.last_execution_source = "ha_ohlc"
+        eo, eh, el, ec = float(o), float(h), float(l), float(c)
+        ro, rh, rl, rc = (float(raw_open), float(raw_high), float(raw_low), float(raw_close)) if has_raw else (eo, eh, el, ec)
+        self.last_raw_close = rc
         trade_close = ec
         self._update_atr(eh, el, ec)
         zz, color = zone_from_sent(hist, histcolor)
@@ -833,8 +876,8 @@ class LatestModsEngine:
                 if effective_trail_every_candle():
                     for p in self.positions:
                         self._advance_best(p, ec, self.pos)
-                # Classic mode: at most one new ticket per bar - a SUPP on the
-                # raw wick break of the last trade candle.
+                # Classic mode: at most one new ticket per bar - a SUPP when this
+                # HA candle's body or wick crosses the last trade candle's wick.
                 if (not every and zz == self.pos and entry_hist_ok(hist, self.pos)
                         and self._entry_ok(eh, el, xtrend, self.pos, self.break_level, False)):
                     if not hour_allowed(hour, self.skip_worst_hours):
@@ -984,16 +1027,14 @@ class LatestModsEngine:
             "trail_entry_bar": effective_trail_entry_bar(),
             "execution_price_source": "live_quote" if execution_prices else self.last_execution_source,
             "open": o, "high": h, "low": l, "close": c,
-            "raw_open": eo, "raw_high": eh, "raw_low": el, "raw_close": ec,
+            "raw_open": ro, "raw_high": rh, "raw_low": rl, "raw_close": rc,
             "spread_cost": effective_spread_cost(), "balance": round(self.balance, 4),
             "duplicate_bar": False, "dedupe_active": bool(bar_key),
         }
         return self._remember(bar_key, result)
 
     def _mode_label(self) -> str:
-        entry = "every_candle" if effective_every_candle() else "classic_amber_supp"
-        stop = f"atr{effective_tsl_atr_mult():g}" if effective_tsl_atr_mult() > 0 else f"ticks{effective_tsl_ticks():g}"
-        return f"{entry}__{stop}"
+        return current_mode_label()
 
     def _remember(self, bar_key: str, result: dict) -> dict:
         if bar_key:

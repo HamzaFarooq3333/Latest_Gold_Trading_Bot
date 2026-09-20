@@ -1,9 +1,9 @@
 {
-    "version": "hist-entry15-colour10-decision-arrows-2026-09-17",
-    "built_utc": "2026-09-17T04:45:00Z",
-    "engine": "Colour HIST_THRESH=10 (green>=+10/red<=-10). Primary+SUPP entries need HIST_ENTRY_THRESH=15. Trade arrows on decision candle not next-bar fill.",
+    "version": "ha-candles-all-rules-2026-09-20",
+    "built_utc": "2026-09-20T18:30:00Z",
+    "engine": "Raw MT5 bars are converted to Heikin-Ashi and EVERY rule runs on the HA candle: body break, X-Trend, SUPP wick (body or wick crosses last-trade wick), fill level, stop test, trailing, ATR. Raw OHLC is record-only. Histogram stays on real close (matches the MQ5 indicator).",
     "live_desk": "https://35.253.21.246",
-    "notes": "Decouple hist colour from entry strength; restore decision-candle arrow mapping.",
+    "notes": "Dashboards draw HA candles only. engine_mode in bridge_status.json is computed fresh each write. Status file rename retries on WinError 5.",
     "gitops": {
         "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
         "agent": "github_update_agent.py",

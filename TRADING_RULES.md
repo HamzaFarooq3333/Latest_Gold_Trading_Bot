@@ -1,4 +1,4 @@
-# Live Trading Rules â€” Ali desk, current as of 2026-09-13
+# Live Trading Rules — Ali desk, current as of 2026-09-20
 
 > **Source of truth for behaviour:** `Ali PC Deployment/runtime/mt5_live_engine.py`
 > (byte-identical copy in `Google Console Deployment/app/mt5_live_engine.py`).
@@ -11,44 +11,46 @@
 
 | Series | Used for |
 |--------|----------|
-| **Heikin-Ashi OHLC** | previous-body break, X-Trend clearance |
-| **Raw broker OHLC** | fills, stops, ATR |
-| `hist = EMA(WilderRSI(raw close, 3), 5) âˆ’ 50` | colour |
+| **Heikin-Ashi OHLC** (the bridge builds it from the raw MT5 bar) | **every candle rule**: previous-body break, X-Trend clearance, SUPP wick break, fill level, stop test, trailing, ATR |
+| **Raw broker OHLC** | record tables and the reconcile mark price only — no rule reads it (since 2026-09-20; before that fills, stops and ATR used the raw bar) |
+| `hist = EMA(WilderRSI(raw close, 3), 5) − 50` | colour — real close on purpose, so it matches the OnyxionHistogram MQ5 indicator on the MT5 chart |
 | X-Trend = **KJ GagaTrend on HA** (`XTREND_SOURCE=gaga`) | clearance gate |
 
 Colour (HIST_THRESH, live **10**): green `hist >= +10`, red `hist <= -10`, amber between.
 Entry strength (HIST_ENTRY_THRESH, live **15**): primary and SUPP only when `hist >= +15` (buy) or `hist <= -15` (sell). Colour can be green/red from ±10 without taking a trade until ±15.
 The bridge colours each bar with the live threshold and the engine trusts that colour.
 
-## 2. Entries â€” live mode (`ENTRY_EVERY_CANDLE=0`)
+Both dashboards (live desk and Testing tab) draw the **Heikin-Ashi candle** — the same candle the rules run on. Raw OHLC stays in the record tables for auditing.
+
+## 2. Entries — live mode (`ENTRY_EVERY_CANDLE=0`)
 
 On **every** green (red) candle:
 
 1. this candle's HA **high > previous HA body high** (low < body low for sells), and
 2. the whole candle sits **clear of X-Trend**: `low > XT` (buy) / `high < XT` (sell), buffer 0,
 
-â†’ open one ticket at the previous body level (or this raw open if it gapped through; live: current ask/bid).
+→ open one ticket at the previous HA body level (or this HA open if it gapped through; live: current ask/bid — a real trade is never filled at an HA price).
 Tickets **stack in the run direction** up to `MAXPOS=20`; an opposite-colour candle while tickets are open does nothing.
 No amber arming, no supplementary wick logic (`MAX_SUPP=10`).
 
-Same-bar sequencing: stops are tested first, then the entry gate â€” a bar that stops the run out and passes the gate re-enters on that bar.
+Same-bar sequencing: stops are tested first, then the entry gate — a bar that stops the run out and passes the gate re-enters on that bar.
 
-Classic mode (`ENTRY_EVERY_CANDLE=0`, not live) keeps the old rules: amber arms, one primary per colour run, SUPP on the raw wick of the last trade candle, `MAX_SUPP`.
+Classic mode (`ENTRY_EVERY_CANDLE=0`, not live) keeps the old rules: amber arms, one primary per colour run, SUPP when the **next candle's body or wick crosses the wick of the candle the last trade was taken on** (HA high for buys / HA low for sells — the HA high already contains the body top, so one comparison covers both), up to `MAX_SUPP`.
 
 ## 3. Stops
 
 | Setting | Live value |
 |---------|------------|
-| Stop distance | **1.25 Ã— Wilder ATR(14)** of raw M15 bars at entry (`TSL_ATR_MULT`), fixed for that ticket |
-| Fallback | `TSL_TICKS=1111` Ã— `TSL_TICK_SIZE=0.001` = $1.111 when the multiplier is 0 |
-| Trail | after every closed candle each ticket's stop ratchets to `close âˆ“ distance`; never loosens |
+| Stop distance | **1.25 × Wilder ATR(14)** of HA M15 bars at entry (`TSL_ATR_MULT`), fixed for that ticket |
+| Fallback | `TSL_TICKS=1111` × `TSL_TICK_SIZE=0.001` = $1.111 when the multiplier is 0 |
+| Trail | after every closed candle each ticket's stop ratchets to `HA close ∓ distance`; never loosens |
 | Entry bar | not stop-tested (`ENTRY_BAR_MODE=defer`) but its close does trail the stop (`TRAIL_ENTRY_BAR=1`) |
 | Broker side | the submitted SL is only widened to the broker's minimum stop distance; the engine's stop is unchanged |
 | Take-profit | none |
 
 ## 4. Exits
 
-* per-ticket trailing stop hit (`raw low â‰¤ SL` for longs / `raw high â‰¥ SL` for shorts)
+* per-ticket trailing stop hit (`HA low ≤ SL` for longs / `HA high ≥ SL` for shorts). The broker also holds the same SL as a real stop order, so a raw wick through it closes the ticket broker-side and the bridge reconciles that on the next poll.
 * **amber histogram flattens everything** and resets the run
 * margin level below 50 % flattens
 
@@ -81,11 +83,11 @@ Every entry is bound to its MT5 position ticket. Each poll the bridge drops engi
 
 ## Lessons kept (do not repeat)
 
-1. **A hard-coded histogram threshold in the bridge** coloured bars now match `.env` HIST_THRESH=10 â€” every tunable is now read live from the environment (`effective_*`), including `hist_color`.
-2. **Trailing the bar extreme** put stops on the wrong side of the market and inflated backtests 25Ã—; trail the **close**.
-3. **Sending the run's active stop with a stacked add** made the broker close the add before the engine knew â€” each ticket sends its own `fill_sl`.
-4. **Partial close by nearest entry** could close a different live ticket â€” match by ticket, and treat "no matching ticket" as already closed by the broker.
-5. **Desk controls overriding `.env` every 2 s** silently reset lot / threshold / SUPP on each redeploy â€” `.env` wins unless saved on the desk.
+1. **A hard-coded histogram threshold in the bridge** coloured bars now match `.env` HIST_THRESH=10 — every tunable is now read live from the environment (`effective_*`), including `hist_color`.
+2. **Trailing the bar extreme** put stops on the wrong side of the market and inflated backtests 25×; trail the **close**.
+3. **Sending the run's active stop with a stacked add** made the broker close the add before the engine knew — each ticket sends its own `fill_sl`.
+4. **Partial close by nearest entry** could close a different live ticket — match by ticket, and treat "no matching ticket" as already closed by the broker.
+5. **Desk controls overriding `.env` every 2 s** silently reset lot / threshold / SUPP on each redeploy — `.env` wins unless saved on the desk.
 6. `auto_update_bridge.ps1` never actually restarted the bridge (`[regex]::Escape` + `-like`); the connection monitor's stale-code check was the only thing that did.
 7. Backtests must stop-test the entry bar pessimistically and charge spread; the desk backtester now runs the same every-candle / ATR rules as live.
 8. Never optimise the live threshold on an 11-day window (TH 20 won the window, lost 30 % out-of-sample over 6 months).
