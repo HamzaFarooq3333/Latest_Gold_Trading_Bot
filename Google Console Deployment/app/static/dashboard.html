@@ -585,7 +585,7 @@ TH = HIST_THRESH (Ali live: 15)</div>
           <li><strong>Amber</strong> is the only colour event that flattens and resets the run.</li>
           <li>HA candle colour never blocks an entry and never forces an exit. A red HA bar inside a green-hist run is held.</li>
           <li>The arrow is drawn on the candle that made the cross. Fill is the previous body (4003), or this open on a far-side gap. The wick (4005) is never the fill.</li>
-          <li>Lot <strong>VOLUME</strong> (Ali live 0.02), leverage <strong>1:100</strong>. Hour filters are OFF on the Ali desk. Add blocked under about <strong>75%</strong> margin.</li>
+          <li>Lot <strong>VOLUME</strong> (Ali live 0.02), leverage <strong>1:200</strong>. Hour filters are OFF on the Ali desk. Add blocked under about <strong>75%</strong> margin.</li>
         </ul>
 
         <h3>3. X-Trend gate (ON, buffer 0.00)</h3>
@@ -876,7 +876,7 @@ X-Trend gate (optional in Testing — live labs stay ON):
 
 Stop   : TSL_ATR_MULT × ATR(14) at entry (live 1.25×) or TSL_TICKS × tick size when the multiplier is 0,
          ratchet only in the trade’s favour on each bar close (buy SL = close − TSL · sell SL = close + TSL). No take-profit.
-Lot    : VOLUME (live 0.02)   ·   Leverage : 1:100   ·   Block add if margin level would fall under ~75%</div>
+Lot    : VOLUME (live 0.02)   ·   Leverage : 1:200   ·   Block add if margin level would fall under ~75%</div>
           <div class="row">
             <label>CSV file</label>
             <input id="btFile" type="file" accept=".csv,text/csv" style="min-width:260px" />
@@ -922,7 +922,7 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:100   ·   Block add if margin l
             <span class="hint">Every rule, fill, stop and the ATR run on the Heikin-Ashi candle (raw MT5 bars are converted first). Live fills at the real ask/bid when the bar closes, so "HA bar close" is the pessimistic, live-like choice.</span>
           </div>
           <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="2000" /></div>
-          <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="100" /></div>
+          <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="200" /></div>
           <div class="row"><label>lot</label><input id="btLot" type="number" step="any" value="0.02" /></div>
           <div class="row"><label>spread (USD)</label><input id="btSpread" type="number" step="any" value="0.06" /></div>
           <div class="row"><label>stop ATR multiplier</label><input id="btTslAtrMult" type="number" step="0.05" min="0" value="1.25" /><span class="hint">stop = multiplier × Wilder ATR(14) of raw bars at entry, fixed per ticket (live 1.25). 0 = use the fixed tick distance below</span></div>

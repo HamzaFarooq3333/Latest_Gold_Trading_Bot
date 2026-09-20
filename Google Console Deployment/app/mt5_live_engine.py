@@ -238,7 +238,7 @@ def effective_focus_best_hours() -> bool:
 # Account model (not desk controls - fixed per deployment).
 CONTRACT = 100.0          # XAUUSD: 1.00 lot = 100 oz
 STOPOUT = 0.5             # margin level below which everything is flattened
-LEVERAGE = _env_float("LEVERAGE", 100.0)
+LEVERAGE = _env_float("LEVERAGE", 200.0)   # Exness demo 472640728 is 1:200
 MARGIN_MIN = _env_float("MARGIN_MIN_PCT", 75.0) / 100.0
 START_BALANCE = _env_float("START_BALANCE", 100.0)
 MAX_SEEN_BARS = 2048      # duplicate-bar cache size

@@ -59,7 +59,7 @@ Classic mode (`ENTRY_EVERY_CANDLE=0`, not live) keeps the old rules: amber arms,
 | Setting | Value |
 |---------|-------|
 | Lot (`VOLUME`) | **0.02** |
-| Leverage | 1:100 |
+| Leverage | 1:200 (Exness demo account setting) |
 | Add blocked if projected margin level < 75 % | yes |
 | Max tickets | 20 |
 | Hour / weekend filters | **OFF** |
