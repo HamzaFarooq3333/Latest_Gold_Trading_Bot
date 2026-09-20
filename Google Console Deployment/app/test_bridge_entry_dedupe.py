@@ -134,13 +134,10 @@ class BridgeEntryDedupeTests(unittest.TestCase):
         runtime = {}
         self.b._mark_entry_sent(runtime, "2026-09-09T01:30:00+00:00")
         self.assertTrue(self.b._entry_already_sent(runtime, "2026-09-09T01:30:00Z"))
-        stripped = self.b._strip_entry_orders(
-            [
-                {"actionType": "ORDER_TYPE_BUY"},
-                {"actionType": "SL_MODIFY"},
-            ]
-        )
-        self.assertEqual([o["actionType"] for o in stripped], ["SL_MODIFY"])
+        # _strip_entry_orders was removed on 2026-09-20: re-shaping the pending
+        # list on retry shifted completed_orders indices onto other legs. The
+        # sent entry is now skipped inside execute_local_orders instead.
+        self.assertFalse(hasattr(self.b, "_strip_entry_orders"))
 
 
 if __name__ == "__main__":

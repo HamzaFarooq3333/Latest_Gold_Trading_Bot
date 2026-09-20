@@ -52,7 +52,10 @@ STATUS_FILE_NAME = "bridge_status.json"
 MAX_PENDING_ATTEMPTS = int(os.environ.get("MAX_PENDING_ATTEMPTS", "8"))
 # Entries from candles that closed more than this long ago are not sent: a
 # catch-up replay must not fill an old signal at the current market price.
-STALE_ENTRY_SECONDS = float(os.environ.get("STALE_ENTRY_SECONDS", "1800"))
+# 180 s = one candle-safe restart plus a couple of polls. It was 1800 s, which
+# let a half-hour-old signal fill at the current ask with a stop derived from
+# a stale HA close.
+STALE_ENTRY_SECONDS = float(os.environ.get("STALE_ENTRY_SECONDS", "180"))
 # Closed-bar window the indicators are seeded from (matches the MQ5 indicators).
 MT5_CALC_WINDOW = 160
 MT5_XTREND_PERIOD = 6
@@ -488,7 +491,7 @@ def collect_bars(symbol: str, count: int = 96) -> list[dict]:
                     last["raw_low"] = min(float(last["raw_low"]), ask, bid)
                     last["raw_close"] = mid
                     hao = float(last["open"])
-                    hac = (hao + float(last["raw_high"]) + float(last["raw_low"]) + mid) / 4.0
+                    hac = (float(last["raw_open"]) + float(last["raw_high"]) + float(last["raw_low"]) + mid) / 4.0
                     last["close"] = last["signal_close"] = hac
                     last["high"] = last["signal_high"] = max(float(last["raw_high"]), hao, hac)
                     last["low"] = last["signal_low"] = min(float(last["raw_low"]), hao, hac)
@@ -966,8 +969,16 @@ def resolve_symbol(preferred: str) -> str | None:
     return None
 
 
-def positions_for_magic(symbol: str, magic: int) -> list:
-    return [p for p in mt5.positions_get(symbol=symbol) or [] if int(p.magic) == magic]
+def positions_for_magic(symbol: str, magic: int) -> list | None:
+    """Our open positions, or None when MT5 could not answer (IPC hiccup).
+
+    None must not be read as "no positions": reconcile would drop every
+    engine ticket and orphan the real ones.
+    """
+    raw = mt5.positions_get(symbol=symbol)
+    if raw is None:
+        return None
+    return [p for p in raw if int(p.magic) == magic]
 
 
 # --------------------------------------------------------------------------- #
@@ -985,7 +996,16 @@ def save_local_engine(engine: Mt5LiveEngine, runtime: dict, model: str) -> None:
     state_file = _engine_state_file(model)
     tmp = state_file.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, state_file)
+    # Same WinError-5 retry as write_local_status: a reader holding the file
+    # for a few ms must not cost us the record of a sent entry.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, state_file)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _new_runtime(last_closed) -> dict:
@@ -1047,10 +1067,6 @@ def normalize_bar_time(value) -> str:
 
 
 ENTRY_ORDER_TYPES = {"ORDER_TYPE_BUY", "ORDER_TYPE_SELL"}
-
-
-def _strip_entry_orders(orders: list[dict] | None) -> list[dict]:
-    return [o for o in (orders or []) if str(o.get("actionType") or "").upper() not in ENTRY_ORDER_TYPES]
 
 
 def _mark_entry_sent(runtime: dict, bar_time) -> None:
@@ -1179,6 +1195,10 @@ def execute_local_orders(cfg: dict, symbol: str, runtime: dict, engine: Mt5LiveE
                         log(f"  bound engine ticket -> #{r['position_ticket']}")
             if any(r.get("ok") for r in one):
                 _mark_entry_sent(runtime, bar_time)
+                # Persist "sent + ticket" immediately: a kill between here and
+                # the end-of-bar save used to replay the bar and send it again.
+                if engine is not None:
+                    save_local_engine(engine, runtime, cfg["model"])
         if not ok:
             runtime["completed_orders"] = sorted(completed)
             return False, results
@@ -1194,9 +1214,10 @@ def process_local_mt5_bar(cfg: dict, symbol: str, engine: Mt5LiveEngine, runtime
     bar_key = normalize_bar_time(bar.get("time")) or str(bar.get("time"))
     pending_key = normalize_bar_time(runtime.get("pending_bar_time"))
     if pending_key and pending_key == bar_key:
-        # Retry: drop entry legs already sent for this bar, keep SL / close legs.
-        if _entry_already_sent(runtime, bar_key):
-            runtime["pending_orders"] = _strip_entry_orders(runtime.get("pending_orders"))
+        # Retry. The pending list is NOT re-shaped here: completed_orders holds
+        # indices into the original list, and stripping the already-sent entry
+        # used to shift a failed close/SL leg onto a "completed" index so it was
+        # never retried. execute_local_orders skips the sent entry itself.
         ok, results = execute_local_orders(cfg, symbol, runtime, engine)
         if not ok:
             attempts = int(runtime.get("pending_attempts") or 0) + 1
@@ -1234,6 +1255,13 @@ def process_local_mt5_bar(cfg: dict, symbol: str, engine: Mt5LiveEngine, runtime
             log(f"DEPLOY SKIP bar={bar_key} - no new entries; open positions/SL preserved")
             clear_deploy_skip_bar()
             runtime["deploy_skip_bar"] = bar_key
+        if not allow_entries and result.get("filled_action"):
+            # The engine already booked this entry; we are not sending it, so
+            # take it back out or a ghost ticket would shadow the run.
+            dropped = engine.engine.discard_unbound_fill()
+            if dropped:
+                log(f"  entry not sent for bar={bar_key} - {dropped} unsent engine ticket(s) discarded")
+                result = engine.engine.result_after_discard(result)
         runtime["pending_bar_time"] = bar_key
         runtime["pending_result"] = result
         runtime["pending_orders"] = engine_order_hints(result, symbol, allow_entries=allow_entries)
@@ -1323,7 +1351,7 @@ def _close_request(symbol: str, position, volume: float, magic: int, deviation: 
 
 def close_all(symbol: str, magic: int, deviation: int) -> list:
     results = []
-    for p in positions_for_magic(symbol, magic):
+    for p in positions_for_magic(symbol, magic) or []:
         req = _close_request(symbol, p, p.volume, magic, deviation, "onyxion-exit")
         results.append(order_send(req) if req else {"ok": False, "error": "no tick"})
     return results
@@ -1425,7 +1453,7 @@ def execute_broker_order(cfg: dict, symbol: str, order: dict) -> tuple[bool, lis
     """Execute one instruction. Returns (ok, per-order result dicts)."""
     kind = str(order.get("actionType") or "").upper()
     magic, deviation = cfg["magic"], cfg["deviation"]
-    positions = sorted(positions_for_magic(symbol, magic), key=_position_sort_key)
+    positions = sorted(positions_for_magic(symbol, magic) or [], key=_position_sort_key)
     broker_floor = float(cfg.get("broker_min_stop_pts") or 0.0)
 
     if kind == "POSITIONS_CLOSE_SYMBOL":
@@ -1486,6 +1514,9 @@ def reconcile_with_broker(engine: Mt5LiveEngine, runtime: dict, symbol: str, mag
     if not any(p.ticket for p in eng.positions):
         return
     broker = positions_for_magic(symbol, magic)
+    if broker is None:
+        log("reconcile skipped: MT5 positions_get returned None")
+        return
     alive = {int(p.ticket) for p in broker}
     tick = mt5.symbol_info_tick(symbol)
     # Fallback mark is the last REAL close, not the HA close the rules use.
@@ -1569,7 +1600,17 @@ def sync_once_mt5_bars(cfg: dict, symbol: str) -> None:
         push_broker_heartbeat(cfg, symbol)
         return
     account = mt5.account_info()
-    balance = float(getattr(account, "balance", 100.0) or 100.0)
+    if account is None or not getattr(account, "balance", None):
+        # Transient MT5 answer: keep the last known balance rather than the
+        # 100.0 placeholder, which would make the margin gate reject adds.
+        balance = float(cfg.get("_last_balance") or 0.0)
+        if balance <= 0:
+            log("account_info unavailable and no balance known yet - skipping this poll")
+            push_broker_heartbeat(cfg, symbol)
+            return
+    else:
+        balance = float(account.balance)
+        cfg["_last_balance"] = balance
     engine, runtime = load_local_engine(bars, balance, model)
     reconcile_with_broker(engine, runtime, symbol, int(cfg["magic"]))
 

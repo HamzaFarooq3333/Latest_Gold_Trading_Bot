@@ -440,6 +440,9 @@ class LatestModsEngine:
         self._last_fill_lot = effective_volume()
         self._atr, self._atr_n, self._atr_prev_close = 0.0, 0, None
         self.last_raw_close: float | None = None
+        # Tickets opened by the most recent push(); the bridge discards them
+        # again when it decides not to send that entry (see discard_unbound_fill).
+        self._last_opened: list[Position] = []
         self.last_execution_source = "not_seen"
         self.last_entry_reason: str | None = None
         self._seen_bars: OrderedDict[str, dict] = OrderedDict()
@@ -509,6 +512,40 @@ class LatestModsEngine:
                 p.ticket = int(ticket)
                 return True
         return False
+
+    def discard_unbound_fill(self) -> int:
+        """Forget the tickets the last push() opened that were never sent.
+
+        push() books the entry before the bridge decides whether to send it
+        (catch-up bar too old, deploy-skip bar). Without this the engine kept
+        a ghost ticket the broker never held: it counted towards MAXPOS and
+        margin, its stop became the run's stop, and its 'stop-out' produced a
+        partial close for a ticket that did not exist. Returns how many were
+        dropped; the spread cost booked for them is refunded.
+        """
+        ghosts = [p for p in self._last_opened if p in self.positions and not p.ticket]
+        if not ghosts:
+            return 0
+        self.positions = [p for p in self.positions if p not in ghosts]
+        self.balance += effective_spread_cost() * len(ghosts)
+        if not self.positions:
+            self.pos = 0
+        self._last_opened = []
+        return len(ghosts)
+
+    def result_after_discard(self, result: dict) -> dict:
+        """The push() result re-stated after discard_unbound_fill()."""
+        out = {**result, "filled_action": None, "fill_price": None, "fill_sl": None,
+               "n_units": self._n_primary(), "n_supp": self._n_supp(), "n_total": self._n_total(),
+               "sl": self._active_sl(), "sl_updated": self._active_sl(),
+               "position": {0: "FLAT", 1: "LONG", -1: "SHORT"}[self.pos],
+               "open_positions": [{"entry": p.entry, "sl": round(p.sl, 4), "lot": p.lot,
+                                   "is_primary": p.is_primary, "ticket": p.ticket,
+                                   "tsl": round(p.tsl or tsl_distance(), 4)} for p in self.positions],
+               "why": str(result.get("why") or "") + " Entry NOT sent (catch-up bar / deploy skip)."}
+        if out.get("action") in ("BUY", "SELL", "BUY_ADD", "SELL_ADD"):
+            out["action"] = "HOLD" if self.pos else "NONE"
+        return out
 
     def reconcile(self, alive_tickets: set[int], mark_price: float) -> list[dict]:
         """Drop tickets the broker no longer holds (its SL fired, or a manual close).
@@ -745,7 +782,7 @@ class LatestModsEngine:
     # ---- stops -------------------------------------------------------------
 
     def _scan_stops(self, eh: float, el: float, only: list[Position] | None = None):
-        """Close every ticket whose stop the bar's raw range touched."""
+        """Close every ticket whose stop the bar's HA range touched."""
         sl_exits, closed_primary, closed_supps = 0, None, []
         if effective_disable_stop_loss() or not self.positions:
             return sl_exits, closed_primary, closed_supps
@@ -856,6 +893,9 @@ class LatestModsEngine:
         just_opened: list[Position] = []
         stopout = False
         sl_before = self._active_sl()
+        # Per-ticket stops before this bar: a stacked add trails on closes that
+        # do not move the primary's stop, and the broker must hear about that.
+        sls_before = {id(p): p.sl for p in self.positions}
 
         if zz == 0:
             self.seen_amber = True
@@ -965,8 +1005,10 @@ class LatestModsEngine:
             action = "HOLD" if self.pos else "NONE"
 
         self.prev_high, self.prev_low, self.prev_open, self.prev_close = h, l, o, c
+        self._last_opened = [p for p in just_opened if p in self.positions]
 
         active_sl = self._active_sl()
+        any_sl_moved = any(abs(p.sl - sls_before.get(id(p), p.sl)) > 1e-9 for p in self.positions)
         if sl_exits:
             decision_reason = f"STOP_EXIT_{sl_exits}"
         elif stopout:
@@ -995,7 +1037,8 @@ class LatestModsEngine:
             "position": {0: "FLAT", 1: "LONG", -1: "SHORT"}[self.pos],
             "n_units": self._n_primary(), "n_supp": self._n_supp(), "n_total": self._n_total(),
             "sl": active_sl, "sl_updated": active_sl,
-            "sl_changed": bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-9)),
+            "sl_changed": bool(active_sl is not None and (sl_before is None or abs(active_sl - sl_before) > 1e-9
+                                                          or any_sl_moved)),
             "run_side": self.run_side, "seen_amber": self.seen_amber,
             "break_level": self.break_level, "last_trade_close": self.last_trade_close,
             "filled_action": filled_action,

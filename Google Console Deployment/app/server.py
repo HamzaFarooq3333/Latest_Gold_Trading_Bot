@@ -148,7 +148,10 @@ def health():
             "trail_every_candle": eng.effective_trail_every_candle(),
             "trail_entry_bar": eng.effective_trail_entry_bar(),
             "last_execution_source": engine.last_execution_source,
-            "raw_execution_active": engine.last_execution_source == "raw_ohlc",
+            # Every rule runs on the Heikin-Ashi candle since 2026-09-20; the old
+            # "raw_execution_active" flag could never be true again, so it was
+            # replaced by the candle basis (also a public build marker on /health).
+            "decision_candle": "heikin_ashi",
             "spread_cost": eng.effective_spread_cost(), "balance": round(engine.balance, 4),
             "dedupe_cached_bars": len(engine._seen_bars),
             "state_persistence": str(STATE_FILE), "state_restored_on_boot": STATE_RESTORED,

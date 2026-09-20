@@ -1702,9 +1702,11 @@ async function load() {
     $("mLiveLot").textContent = fmt(bridge.lot != null ? bridge.lot : (b.controls || {}).VOLUME, 2);
     lastControls = b.controls || {};
     const atrMult = Number(bridge.tsl_atr_mult != null ? bridge.tsl_atr_mult : lastControls.TSL_ATR_MULT);
-    $("mStopMode").textContent = atrMult > 0
-      ? ("ATR × " + atrMult + (bridge.engine_mode ? " · " + bridge.engine_mode : ""))
-      : ((lastControls.TSL_TICKS || "—") + " ticks fixed");
+    $("mStopMode").textContent = Number.isFinite(atrMult)
+      ? (atrMult > 0
+        ? ("ATR × " + atrMult + (bridge.engine_mode ? " · " + bridge.engine_mode : ""))
+        : ((lastControls.TSL_TICKS || "—") + " ticks fixed"))
+      : (bridge.engine_mode || "—");
     if ($("modeNote")) $("modeNote").textContent = bridge.engine_mode || (bridge.entry_every_candle === false ? "classic (amber-armed)" : "every candle");
     if ($("thNote")) $("thNote").textContent = String(bridge.hist_thresh != null ? bridge.hist_thresh : liveThresh());
     if ($("stopNote")) $("stopNote").textContent = atrMult > 0 ? (atrMult + " × ATR(14)") : ((lastControls.TSL_TICKS || 1111) + " ticks");

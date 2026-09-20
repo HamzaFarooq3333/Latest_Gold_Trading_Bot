@@ -235,7 +235,10 @@ def stale_code_running() -> tuple[bool, str]:
 
     newest = 0.0
     newest_name = ""
-    for name in ("bridge_trader.py", "mt5_live_engine.py", "VERSION.json"):
+    # Only files the bridge process actually loads. VERSION.json is bumped on
+    # every push (desk-only changes included) and used to trigger a restart
+    # here even when auto_update had just logged "runtime unchanged".
+    for name in ("bridge_trader.py", "mt5_live_engine.py"):
         f = ROOT / name
         try:
             m = f.stat().st_mtime

@@ -209,14 +209,22 @@ try {
 
   $restart = $false
   $copied = @()
+  $unchanged = @()
   $stamp = Get-Date
   foreach ($name in $trackFiles) {
     $from = Join-Path $runtime $name
     if (-not (Test-Path $from)) { continue }
     $to = Join-Path $Root $name
-    if ((Test-Path $to) -and $name -match $restartOn) {
-      if ((Get-FileHash $to -Algorithm SHA256).Hash -ne (Get-FileHash $from -Algorithm SHA256).Hash) { $restart = $true }
+    if ((Test-Path $to) -and ((Get-FileHash $to -Algorithm SHA256).Hash -eq (Get-FileHash $from -Algorithm SHA256).Hash)) {
+      # Identical content: leave the file alone, mtime included. Re-copying and
+      # re-stamping it made the connection monitor's stale-code check (file
+      # newer than the running bridge) restart the bridge two minutes after
+      # every push that did not touch the runtime - outside the candle-safe
+      # window this script waited for.
+      $unchanged += $name
+      continue
     }
+    if ((Test-Path $to) -and $name -match $restartOn) { $restart = $true }
     Copy-Item $from $to -Force
     # Copy-Item keeps the source mtime (the git checkout time). The connection
     # monitor's stale-code check compares file mtime with the bridge's start
@@ -224,6 +232,7 @@ try {
     (Get-Item $to).LastWriteTime = $stamp
     $copied += $name
   }
+  if ($unchanged.Count) { Write-Log "unchanged (not copied): $($unchanged -join ', ')" }
   Copy-Item (Join-Path $pack "scripts\*") (Join-Path $Root "scripts") -Recurse -Force
   $copied += "scripts/*"
   foreach ($extra in @("fix_script_encoding.ps1", "START_BOT.bat", "CHECK_BOT.bat", "STOP_BOT.bat")) {

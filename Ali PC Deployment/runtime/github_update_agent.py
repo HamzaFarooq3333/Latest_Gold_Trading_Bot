@@ -437,6 +437,8 @@ def refresh_local_meta(state: dict, env: dict) -> None:
 def _block(state: dict, error: str, result: str = "update_blocked") -> None:
     state["update_state"] = "blocked"
     state["blocked_error"] = error
+    state["blocked_sha"] = state.get("remote_sha")
+    state["blocked_at"] = time.time()
     state["last_result"] = result
     log(f"update blocked: {error}")
 
@@ -563,6 +565,15 @@ def main() -> int:
                     state["local_sha"] = None
                 last_poll = now
                 behind = state.get("local_sha") and state.get("remote_sha") and state["local_sha"] != state["remote_sha"]
+                # A blocked update (fetch timeout, gate failure, exit code) used
+                # to stay blocked until the process was restarted. Retry once a
+                # new push arrives or after a 15-minute cooldown.
+                if state.get("update_state") == "blocked":
+                    blocked_sha = state.get("blocked_sha")
+                    blocked_at = float(state.get("blocked_at") or 0.0)
+                    if (blocked_sha and state.get("remote_sha") != blocked_sha) or now - blocked_at >= 900:
+                        log("retrying after blocked update")
+                        state["update_state"] = "idle"
                 if behind and state.get("update_state") == "idle":
                     apply_update(state, env)
 

@@ -22,7 +22,7 @@ The bridge colours each bar with the live threshold and the engine trusts that c
 
 Both dashboards (live desk and Testing tab) draw the **Heikin-Ashi candle** — the same candle the rules run on. Raw OHLC stays in the record tables for auditing.
 
-## 2. Entries — live mode (`ENTRY_EVERY_CANDLE=0`)
+## 2. Entries — live mode on the Ali PC (`ENTRY_EVERY_CANDLE=1` in its `.env`; the repo's example env and the GCP desk default to classic, `0`)
 
 On **every** green (red) candle:
 
@@ -31,7 +31,7 @@ On **every** green (red) candle:
 
 → open one ticket at the previous HA body level (or this HA open if it gapped through; live: current ask/bid — a real trade is never filled at an HA price).
 Tickets **stack in the run direction** up to `MAXPOS=20`; an opposite-colour candle while tickets are open does nothing.
-No amber arming, no supplementary wick logic (`MAX_SUPP=10`).
+No amber arming, no supplementary wick logic (`MAX_SUPP` is ignored in this mode; the Ali PC sets it to 0).
 
 Same-bar sequencing: stops are tested first, then the entry gate — a bar that stops the run out and passes the gate re-enters on that bar.
 

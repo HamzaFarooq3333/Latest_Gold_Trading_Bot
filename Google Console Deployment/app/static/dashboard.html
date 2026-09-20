@@ -912,7 +912,8 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:200   ·   Block add if margin l
               <option value="classic">Classic — amber arms, one primary per run, SUPP when the next HA candle's body or wick crosses the last-trade wick</option>
             </select>
           </div>
-          <div class="row"><label>hist threshold</label><input id="btHistThresh" type="number" step="0.5" min="0" value="15" /><span class="hint">green ≥ +TH · red ≤ −TH · amber between (live 15)</span></div>
+          <div class="row"><label>hist threshold</label><input id="btHistThresh" type="number" step="0.5" min="0" value="15" /><span class="hint">colour: green ≥ +TH · red ≤ −TH · amber between (Ali PC live 15)</span></div>
+          <div class="row"><label>entry threshold</label><input id="btHistEntryThresh" type="number" step="0.5" min="0" value="15" /><span class="hint">HIST_ENTRY_THRESH: a trade needs |hist| ≥ this as well as the colour (live 15; the desk defaults colour at 10)</span></div>
           <div class="row">
             <label>Entry fill</label>
             <select id="btFillMode" style="min-width:320px">
@@ -925,7 +926,7 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:200   ·   Block add if margin l
           <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="200" /></div>
           <div class="row"><label>lot</label><input id="btLot" type="number" step="any" value="0.02" /></div>
           <div class="row"><label>spread (USD)</label><input id="btSpread" type="number" step="any" value="0.06" /></div>
-          <div class="row"><label>stop ATR multiplier</label><input id="btTslAtrMult" type="number" step="0.05" min="0" value="1.25" /><span class="hint">stop = multiplier × Wilder ATR(14) of raw bars at entry, fixed per ticket (live 1.25). 0 = use the fixed tick distance below</span></div>
+          <div class="row"><label>stop ATR multiplier</label><input id="btTslAtrMult" type="number" step="0.05" min="0" value="1.25" /><span class="hint">stop = multiplier × Wilder ATR(14) of HA bars at entry, fixed per ticket (live 1.25). 0 = use the fixed tick distance below</span></div>
           <div class="row"><label>TSL ticks</label><input id="btTslTicks" type="number" step="1" min="1" value="1111" /><span class="hint">fixed trailing distance in ticks, used only when the ATR multiplier is 0</span></div>
           <div class="row"><label>tick size</label><input id="btTslTickSize" type="number" step="0.001" min="0.0001" value="0.001" /><span class="hint">XAUUSDm trade_tick_size; distance = ticks × size</span></div>
           <div class="row"><label>stop slippage (pt)</label><input id="btStopSlip" type="number" step="0.01" min="0" value="0" /><span class="hint">extra adverse fill beyond a touched stop (live 0)</span></div>
@@ -3419,8 +3420,9 @@ Short is the mirror.</div>
       const hasHaSignal = [iHAO, iHAH, iHAL, iHAC].every(x => x != null);
       // Raw MT5 exports commonly have separate DATE/TIME and no X-Trend.
       // Treat that shape as executable OHLC and derive HA + SuperTrend.
-      const inferRaw = !hasExplicitRaw && !hasHaSignal &&
-        iXt == null && iDate != null && iClock != null && iDate !== iClock;
+      // A file that already carries HA also carries an X-Trend column; plain
+      // OHLC without one is a raw MT5 export whatever its time columns look like.
+      const inferRaw = !hasExplicitRaw && !hasHaSignal && iXt == null;
       const hasRaw = hasExplicitRaw || hasHaSignal || inferRaw;
       const rows = [];
       for (let r = 1; r < lines.length; r++) {
@@ -3556,7 +3558,13 @@ Short is the mirror.</div>
       // first coloured X-Trend-clear bar after amber without needing a new extreme.
       const priWick = cfg.priWick === true;
       const stopSlip = Number.isFinite(+cfg.stopSlip) ? Math.max(0, +cfg.stopSlip) : 0.25;
-      const maxSupp = cfg.maxSupp || 10;
+      // MAX_SUPP=0 (the live value) means NO supplementary tickets; "|| 10" used to
+      // turn that 0 into 10.
+      const maxSupp = Number.isFinite(+cfg.maxSupp) ? Math.max(0, +cfg.maxSupp) : 10;
+      // HIST_ENTRY_THRESH: colour (zone) comes from the hist threshold; a trade also
+      // needs |hist| at this level. Mirrors entry_hist_ok() in mt5_live_engine.py.
+      const entryTh = Number.isFinite(+cfg.histEntryThresh) ? Math.max(0, +cfg.histEntryThresh) : 15;
+      const entryHistOk = (b, want) => want > 0 ? b.hist >= entryTh : b.hist <= -entryTh;
       const everyCandle = cfg.entryEveryCandle === true;
       const atrMult = Number.isFinite(+cfg.tslAtrMult) ? Math.max(0, +cfg.tslAtrMult) : 0;
       // Wilder ATR(14) on the HA bars (open/high/low/close are HA here), seeded
@@ -3687,6 +3695,7 @@ Short is the mirror.</div>
         return want > 0 ? b.high > level : b.low < level;
       };
       const wickFill = (b, level, want) => {
+        if (fillAtClose) return b.close;
         const lvl = Number(level);
         if (want > 0) return b.open > lvl ? b.open : lvl;
         return b.open < lvl ? b.open : lvl;
@@ -3694,6 +3703,7 @@ Short is the mirror.</div>
       const tradeWick = (b, want) => want > 0 ? b.high : b.low;
       // Primary: prev-body break + X-Trend clear. SUPP: last-trade wick break only (no XT).
       const entryOkPrimary = (b, prev, want) => {
+        if (!entryHistOk(b, want)) return false;
         if (!brokePrevBody(b, prev, want)) return false;
         if (xtGate && !xtClear(b, want)) { xtSkip++; return false; }
         return true;
@@ -3701,6 +3711,7 @@ Short is the mirror.</div>
       // SUPP: wick break of the last trade candle. The X-Trend check is optional
       // here (xtGateSupp) — primary always uses it, SUPP only when switched ON.
       const entryOkSupp = (b, want) => {
+        if (!entryHistOk(b, want)) return false;
         if (!brokeWick(b, breakLevel, want)) return false;
         if (xtGateSupp && !xtClear(b, want)) { xtSkip++; return false; }
         return true;
@@ -4413,6 +4424,9 @@ Short is the mirror.</div>
           ? (cfg.skipWorst ? "worst hour — entries skipped" : "worst hour — skip filter OFF")
           : (hourKind === "best" ? "best hour (2× lot when focus ON)" : "normal hour"),
         !!cfg.skipWorst);
+      add("hist_entry_strength", "Histogram strong enough to trade (HIST_ENTRY_THRESH)",
+        Math.abs(Number(bar.hist)) >= (Number.isFinite(+(($("btHistEntryThresh") || {}).value)) ? +$("btHistEntryThresh").value : 15),
+        "|hist| " + btFmt(Math.abs(Number(bar.hist)), 2) + " vs " + (($("btHistEntryThresh") || {}).value || 15));
       add("hist_not_amber", "Histogram not amber", zz !== 0,
         zz === 0 ? "orange — flatten only, no new entries" : (zz > 0 ? "green histogram" : "red histogram"));
 
@@ -4471,7 +4485,7 @@ Short is the mirror.</div>
               ? "no last-trade wick level"
               : (wickOk
                 ? `HA ${buy ? "high" : "low"} crossed last-trade wick ${btFmt(wickLvl, 2)}`
-                : `raw ${buy ? "high" : "low"} ${btFmt(wickPx, 2)} did not break wick ${btFmt(wickLvl, 2)}`));
+                : `HA ${buy ? "high" : "low"} ${btFmt(wickPx, 2)} did not cross wick ${btFmt(wickLvl, 2)}`));
           if (cfg.xtGateSupp) {
             const geom = btXtGapDetail(bar, xtBuf);
             const xtClear = Number.isFinite(bar.xtrend)
@@ -5650,7 +5664,8 @@ Short is the mirror.</div>
             lot: +$("btLot").value,
             spread: +$("btSpread").value,
             maxpos: +$("btMaxpos").value,
-            maxSupp: +(($("btMaxSupp") && $("btMaxSupp").value) || 10),
+            maxSupp: $("btMaxSupp") && $("btMaxSupp").value !== "" ? +$("btMaxSupp").value : 10,
+            histEntryThresh: $("btHistEntryThresh") && $("btHistEntryThresh").value !== "" ? +$("btHistEntryThresh").value : 15,
             marginMin: +$("btMargMin").value / 100,
             skipWorst: $("btSkipWorst") ? $("btSkipWorst").value === "1" : false,
             focusBest: $("btFocusBest") ? $("btFocusBest").value === "1" : false,
