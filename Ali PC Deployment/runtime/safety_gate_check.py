@@ -84,7 +84,8 @@ def run_gate(root: Path, *, require_dashboard: bool = True) -> dict:
     engine = find_file(roots, "mt5_live_engine.py")
     if engine is not None:
         text = engine.read_text(encoding="utf-8", errors="replace")
-        for symbol in ("class Mt5LiveEngine", "class LatestModsEngine", "def effective_hist_thresh", "def tsl_distance"):
+        for symbol in ("class Mt5LiveEngine", "class LatestModsEngine", "def effective_hist_thresh",
+                       "def tsl_distance", "def trail_live", "def effective_trail_live"):
             if symbol not in text:
                 errors.append(f"{engine}: engine missing {symbol!r}")
     return {"ok": not errors, "root": str(root), "compiled": compiled,

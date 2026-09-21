@@ -1,10 +1,10 @@
 {
-  "version": "leverage-1-200-2026-09-20",
-  "built_utc": "2026-09-20T18:20:00Z",
-  "desk_deployed_utc": "2026-09-20T18:27:56Z",
-  "engine": "HA all rules; LEVERAGE 200",
+  "version": "trail-live-2026-09-21",
+  "built_utc": "2026-09-21T17:00:00Z",
+  "desk_deployed_utc": null,
+  "engine": "HA rules; TRAIL_LIVE tick ratchet + candle-close trail; LEVERAGE 200",
   "live_desk": "https://35.253.21.246",
-  "notes": "Leverage 1:200. Desk shows leverage + last GitHub apply time.",
+  "notes": "Live trailing stop: SL ratchets on every bridge poll from bid/ask, not only on M15 close. Ali PC auto-update picks this VERSION fingerprint.",
   "gitops": {
     "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
     "agent": "github_update_agent.py",

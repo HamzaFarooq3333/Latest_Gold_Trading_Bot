@@ -8,11 +8,13 @@ executes on the Exness demo account.
 Per poll (MT5_POLL_SECONDS, default 2 s):
   1. pull the desk's live controls (only applied once someone saved them)
   2. reconcile the engine's tickets with what the broker actually holds
-  3. feed every newly closed M15 bar to mt5_live_engine.LatestModsEngine.
+  3. live-trail open stops from the current bid/ask (TRAIL_LIVE=1) and
+     push SL_MODIFY to MT5 without waiting for the M15 close
+  4. feed every newly closed M15 bar to mt5_live_engine.LatestModsEngine.
      The raw MT5 bar is converted to a Heikin-Ashi candle here (collect_bars)
      and EVERY rule - gates, fills, stops, ATR - runs on that HA candle; the
      raw bar travels alongside for the desk's record tables only.
-  4. translate the engine result into MT5 orders (entry / stop modify /
+  5. translate the engine result into MT5 orders (entry / stop modify /
      partial close / flatten) and retry a failed leg safely
   5. POST a full snapshot (account, positions, trades, bars, decisions) to the
      GCP live desk and write state/bridge_status.json for the GitHub agent
@@ -1537,6 +1539,46 @@ def reconcile_with_broker(engine: Mt5LiveEngine, runtime: dict, symbol: str, mag
         runtime["_warned_unknown"] = sorted(set(runtime.get("_warned_unknown") or []) | unknown)[-50:]
 
 
+def apply_live_trailing_stops(cfg: dict, symbol: str, engine: Mt5LiveEngine, runtime: dict) -> None:
+    """Ratchet engine SLs from the live tick and push SL_MODIFY to MT5 (TRAIL_LIVE).
+
+    Runs every poll while positions are open — does not wait for M15 close.
+    BUY trails on bid; SELL trails on ask (exit-side price).
+    """
+    if not mt5_live_engine.effective_trail_live():
+        return
+    eng = engine.engine
+    if not eng.positions or eng.pos == 0:
+        return
+    # Do not fight a pending bar's own SL_MODIFY / close legs mid-retry.
+    if runtime.get("pending_bar_time") and runtime.get("pending_orders"):
+        return
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return
+    bid = float(getattr(tick, "bid", 0.0) or 0.0)
+    ask = float(getattr(tick, "ask", 0.0) or 0.0)
+    if bid <= 0 or ask <= 0:
+        return
+    mark = bid if eng.pos > 0 else ask
+    result = engine.trail_live(mark)
+    if not result.get("sl_changed"):
+        return
+    order = {
+        "actionType": "SL_MODIFY",
+        "symbol": symbol,
+        "sl": result.get("sl"),
+        "stopLoss": result.get("sl"),
+        "positions": result.get("open_positions") or [],
+    }
+    ok, results = execute_broker_order(cfg, symbol, order)
+    if ok:
+        save_local_engine(engine, runtime, cfg["model"])
+        log(f"live trail SL -> {result.get('sl')} mark={mark} tickets={result.get('n_total')}")
+    else:
+        log(f"live trail SL_MODIFY failed: {results}")
+
+
 # --------------------------------------------------------------------------- #
 # MT5 session                                                                  #
 # --------------------------------------------------------------------------- #
@@ -1613,6 +1655,7 @@ def sync_once_mt5_bars(cfg: dict, symbol: str) -> None:
         cfg["_last_balance"] = balance
     engine, runtime = load_local_engine(bars, balance, model)
     reconcile_with_broker(engine, runtime, symbol, int(cfg["magic"]))
+    apply_live_trailing_stops(cfg, symbol, engine, runtime)
 
     # SKIP_WEEKENDS=1: do not keep retrying a Friday entry over the weekend.
     if mt5_live_engine.effective_skip_weekends() and datetime.now(timezone.utc).weekday() >= 5:

@@ -1,13 +1,13 @@
-{
-  "version": "leverage-1-200-2026-09-20",
-  "built_utc": "2026-09-20T18:20:00Z",
-  "desk_deployed_utc": "2026-09-20T18:37:22Z",
-  "engine": "HA all rules; LEVERAGE 200",
-  "live_desk": "https://35.253.21.246",
-  "notes": "Leverage 1:200. Desk shows leverage + last GitHub apply time.",
-  "gitops": {
-    "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
-    "agent": "github_update_agent.py",
-    "desk_redeploy": "Hamza office watcher on any push"
-  }
+﻿{
+    "version":  "trail-live-2026-09-21",
+    "built_utc":  "2026-09-21T17:05:00Z",
+    "desk_deployed_utc":  "2026-09-20T18:37:22Z",
+    "engine":  "HA all rules; LEVERAGE 200",
+    "live_desk":  "https://35.253.21.246",
+    "notes":  "Ali bridge TRAIL_LIVE tick trailing; candle-close trail kept",
+    "gitops":  {
+                   "source_of_truth":  "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
+                   "agent":  "github_update_agent.py",
+                   "desk_redeploy":  "Hamza office watcher on any push"
+               }
 }

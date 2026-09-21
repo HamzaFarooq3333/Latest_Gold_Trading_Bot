@@ -217,6 +217,15 @@ def effective_trail_entry_bar() -> bool:
     return _env_flag("TRAIL_ENTRY_BAR", "1")
 
 
+def effective_trail_live() -> bool:
+    """Ratchet stops on live ticks between M15 closes (bridge poll loop).
+
+    On by default. Candle-close trail (TRAIL_EVERY_CANDLE) still runs on bar
+    close; this only tightens earlier as price makes new favorable extremes.
+    """
+    return _env_flag("TRAIL_LIVE", "1")
+
+
 def effective_entry_bar_mode() -> str:
     """off / test / defer - whether the entry bar's own range can stop the trade."""
     mode = os.environ.get("ENTRY_BAR_MODE", "defer").strip().lower()
@@ -641,6 +650,46 @@ class LatestModsEngine:
         else:
             p.best_price = min(p.best_price, float(close))
             p.sl = min(p.sl, p.best_price + d)
+
+    def trail_live(self, mark: float) -> dict:
+        """Tighten stops from a live mark (tick) without waiting for M15 close.
+
+        BUY uses rising bid/mark; SELL uses falling ask/mark. Only ratchets —
+        never widens. Used by the bridge every poll when TRAIL_LIVE=1.
+        """
+        if not effective_trail_live() or not self.positions or self.pos == 0:
+            return {
+                "sl_changed": False,
+                "sl": self._active_sl(),
+                "open_positions": [],
+                "n_total": self._n_total(),
+                "trail_live": effective_trail_live(),
+            }
+        mark_f = float(mark)
+        before = {id(p): float(p.sl) for p in self.positions}
+        for p in self.positions:
+            self._advance_best(p, mark_f, self.pos)
+        # Ignore sub-point noise so we do not spam MT5 SL_MODIFY every poll.
+        changed = any(abs(float(p.sl) - before[id(p)]) >= 0.01 for p in self.positions)
+        open_positions = [
+            {
+                "entry": p.entry,
+                "sl": round(p.sl, 4),
+                "lot": p.lot,
+                "is_primary": p.is_primary,
+                "ticket": p.ticket,
+                "tsl": round(p.tsl or tsl_distance(), 4),
+            }
+            for p in self.positions
+        ]
+        return {
+            "sl_changed": changed,
+            "sl": self._active_sl(),
+            "open_positions": open_positions,
+            "n_total": self._n_total(),
+            "trail_live": True,
+            "mark": mark_f,
+        }
 
     def _active_sl(self) -> float | None:
         """The stop protecting the run: the primary's while it lives, else the tightest."""
@@ -1068,6 +1117,7 @@ class LatestModsEngine:
             "entry_bar_mode": effective_entry_bar_mode(),
             "trail_every_candle": effective_trail_every_candle(),
             "trail_entry_bar": effective_trail_entry_bar(),
+            "trail_live": effective_trail_live(),
             "execution_price_source": "live_quote" if execution_prices else self.last_execution_source,
             "open": o, "high": h, "low": l, "close": c,
             "raw_open": ro, "raw_high": rh, "raw_low": rl, "raw_close": rc,
@@ -1116,6 +1166,10 @@ class Mt5LiveEngine:
         )
         self.last_closed_time = bar.get("time")
         return result
+
+    def trail_live(self, mark: float) -> dict:
+        """Proxy to LatestModsEngine.trail_live for the bridge poll loop."""
+        return self.engine.trail_live(mark)
 
     def warmup(self, bars: list[dict], balance: float | None = None) -> None:
         """Replay history for indicator/run context without keeping any trades."""
