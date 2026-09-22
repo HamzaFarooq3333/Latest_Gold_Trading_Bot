@@ -13,8 +13,12 @@ ENGINE_STUB = "\n".join([
     "    return 1.111",
     "def effective_hist_thresh():",
     "    return 15.0",
+    # Required since Hamza's TRAIL_LIVE commit (564bd09): the gate looks for both.
+    "def effective_trail_live():",
+    "    return True",
     "class LatestModsEngine:",
-    "    pass",
+    "    def trail_live(self, mark):",
+    "        return {}",
     "class Mt5LiveEngine:",
     "    pass",
     "",
