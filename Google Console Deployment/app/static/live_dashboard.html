@@ -256,8 +256,8 @@
   <section class="card span2">
     <div class="note">
       <strong>__DESK_TITLE__</strong> — engine mode <strong id="modeNote">waiting for heartbeat</strong>.
-      <strong>Live rules:</strong> on every green/red candle (hist beyond ±<span id="thNote">15</span>) that <strong>breaks the previous body</strong> and sits <strong>clear of X-Trend</strong>, a ticket opens and stacks in the run direction;
-      each ticket trails its own stop (<span id="stopNote">1.25 × ATR(14)</span>) to every bar close; <strong>amber flattens</strong> everything.
+      <strong>Live rules:</strong> on every green/red candle (hist beyond ±<span id="thNote">10</span>) that <strong>breaks the previous body</strong> and sits <strong>clear of X-Trend</strong>, a ticket opens and stacks in the run direction;
+      each ticket trails its own stop (<span id="stopNote">1.25 × ATR(14)</span>) on <strong>live ticks</strong> (TRAIL_LIVE) and again on bar close; <strong>amber flattens</strong> everything.
       Chart = MT5 live M15. Indicator source: <strong id="sourceNote">waiting for heartbeat</strong>.
       Each bar’s <strong>Why</strong> column explains why a trade was taken or skipped.
     </div>
@@ -300,11 +300,22 @@
   </section>
 
   <section class="card">
-    <h2>Open positions</h2>
+    <h2>Open positions · live trailing SL</h2>
+    <div class="legend">SL updates on every bridge poll from live bid/ask (TRAIL_LIVE), not only on M15 close.</div>
+    <div class="metrics" style="margin-bottom:.55rem;grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+      <div class="metric"><div class="lbl">Engine / active SL</div><div class="val" id="mLiveTrailSl">—</div></div>
+      <div class="metric"><div class="lbl">Trail mode</div><div class="val" id="mTrailMode" style="font-size:.82rem">—</div></div>
+      <div class="metric"><div class="lbl">Open tickets</div><div class="val" id="mOpenSlCount">—</div></div>
+    </div>
     <div class="scroll">
       <table>
-        <thead><tr><th>Ticket</th><th>Kind</th><th>Side</th><th>Vol</th><th>Entry</th><th>SL</th><th>P/L</th></tr></thead>
-        <tbody id="posBody"><tr><td colspan="7" class="muted">Waiting…</td></tr></tbody>
+        <thead>
+          <tr>
+            <th>Ticket</th><th>Kind</th><th>Side</th><th>Lot</th><th>Entry</th>
+            <th>Live SL</th><th>Pts to SL</th><th>P/L</th>
+          </tr>
+        </thead>
+        <tbody id="posBody"><tr><td colspan="8" class="muted">Waiting…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -317,7 +328,7 @@
   <section class="card span2">
     <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (this session)</h2>
     <div class="row-actions" style="margin-bottom:.45rem">
-      <span class="muted" style="flex:1;font-size:.78rem">Starts empty after desk wipe / bridge fresh start.</span>
+      <span class="muted" style="flex:1;font-size:.78rem">Candles &amp; trades from 20 Sep 2026 onward (nothing earlier). Clear desk cache keeps that floor.</span>
       <button type="button" id="btnDlTrades2">Download trades CSV</button>
     </div>
     <div class="scroll tall">
@@ -379,11 +390,12 @@
 
   <section class="card span2">
     <h2>Stop loss / trailing stop records</h2>
-    <div class="legend">Open-position SL + engine trail updates from the bridge.</div>
+    <div class="legend">Open-position live SL + engine trail updates from the bridge (tick trail + candle-close trail).</div>
     <div class="metrics" style="margin-bottom:.6rem">
       <div class="metric"><div class="lbl">Engine SL now</div><div class="val" id="mEngineSl">—</div></div>
       <div class="metric"><div class="lbl">Live lot</div><div class="val" id="mLiveLot">—</div></div>
       <div class="metric"><div class="lbl">Stop mode</div><div class="val" id="mStopMode" style="font-size:.85rem">—</div></div>
+      <div class="metric"><div class="lbl">Per-ticket live SL</div><div class="val" id="mTicketSls" style="font-size:.78rem;line-height:1.35">—</div></div>
     </div>
     <div class="scroll tall">
       <table>
@@ -463,6 +475,29 @@
     <div class="row-actions" style="margin-top:.7rem">
       <button type="button" id="btnSaveControls">Save live controls</button>
       <span class="muted" id="ctrlStatus">—</span>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <h2>Trade P&amp;L detail — entry · exit · difference · profit/loss · lot</h2>
+    <div class="legend">
+      Every PRIMARY / SUPP fill this session. Difference = price move in your favour (+) or against (−) in points.
+      Closed trades use exit price; open trades use live mark and show floating P/L.
+    </div>
+    <div class="row-actions" style="margin-bottom:.45rem">
+      <span class="muted" style="flex:1;font-size:.78rem" id="pnlDetailSummary">—</span>
+      <button type="button" id="btnDlPnlDetail">Download this table CSV</button>
+    </div>
+    <div class="scroll tall">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Kind</th><th>Side</th><th>Open time</th><th>Close time</th>
+            <th>Lot</th><th>Entry</th><th>Exit</th><th>Diff (pts)</th><th>Profit / Loss $</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="pnlDetailBody"><tr><td colspan="11" class="muted">No trades yet</td></tr></tbody>
+      </table>
     </div>
   </section>
 
@@ -844,18 +879,31 @@ function initCharts() {
   chartReady = true;
 }
 
-// Session window: after desk wipe / bridge fresh start, only show this session.
-// If session_started_at is missing, use NOW (never fall back to 7 days — that
-// resurfaced Sep 15 trades after GCP redeploys cleared the wipe clock).
+// History window: use the desk session clock when present. NEVER fall back to
+// Date.now() — that wiped the chart every time session_started_at was missing
+// after a redeploy. Prefer earliest bar in the payload, else show everything.
 function historyStartMs(broker) {
   const fromBroker = Date.parse(broker?.session_started_at || "");
   if (Number.isFinite(fromBroker)) {
     sessionStartMs = fromBroker;
     return fromBroker;
   }
+  const pools = []
+    .concat(broker?.bars || [])
+    .concat(broker?.bar_history || [])
+    .concat(broker?.ohlc_records || []);
+  let earliest = null;
+  for (const b of pools) {
+    const t = Date.parse(b?.time || "");
+    if (Number.isFinite(t) && (earliest == null || t < earliest)) earliest = t;
+  }
+  if (earliest != null) {
+    sessionStartMs = earliest;
+    return earliest;
+  }
   if (sessionStartMs != null) return sessionStartMs;
-  sessionStartMs = Date.now();
-  return sessionStartMs;
+  sessionStartMs = 0;
+  return 0;
 }
 
 let lastAccountSnap = { profit: null, equity: null, balance: null };
@@ -1702,11 +1750,19 @@ async function load() {
     $("mLiveLot").textContent = fmt(bridge.lot != null ? bridge.lot : (b.controls || {}).VOLUME, 2);
     lastControls = b.controls || {};
     const atrMult = Number(bridge.tsl_atr_mult != null ? bridge.tsl_atr_mult : lastControls.TSL_ATR_MULT);
+    const trailLiveOn = bridge.trail_live === true || bridge.trail_live === 1
+      || String(lastControls.TRAIL_LIVE || "1") === "1" || String(lastControls.TRAIL_LIVE || "").toLowerCase() === "true"
+      || lastControls.TRAIL_LIVE == null; // default on when not overridden
     $("mStopMode").textContent = Number.isFinite(atrMult)
       ? (atrMult > 0
         ? ("ATR × " + atrMult + (bridge.engine_mode ? " · " + bridge.engine_mode : ""))
         : ((lastControls.TSL_TICKS || "—") + " ticks fixed"))
       : (bridge.engine_mode || "—");
+    if ($("mLiveTrailSl")) $("mLiveTrailSl").textContent = fmt(bridge.engine_sl);
+    if ($("mTrailMode")) {
+      $("mTrailMode").textContent = (trailLiveOn ? "LIVE ticks" : "candle close only")
+        + (atrMult > 0 ? (" · ATR×" + atrMult) : "");
+    }
     if ($("modeNote")) $("modeNote").textContent = bridge.engine_mode || (bridge.entry_every_candle === false ? "classic (amber-armed)" : "every candle");
     if ($("thNote")) $("thNote").textContent = String(bridge.hist_thresh != null ? bridge.hist_thresh : liveThresh());
     if ($("stopNote")) $("stopNote").textContent = atrMult > 0 ? (atrMult + " × ATR(14)") : ((lastControls.TSL_TICKS || 1111) + " ticks");
@@ -1734,9 +1790,42 @@ async function load() {
       : "waiting for closed MT5 bar";
 
     const pos = b.positions || [];
-    $("posBody").innerHTML = pos.length ? pos.map(p =>
-      `<tr><td>${p.ticket}</td><td class="kind-${p.kind||'OTHER'}">${p.kind||"—"}</td><td class="${p.side==='BUY'?'buy':'sell'}">${p.side}</td><td>${fmt(p.volume,2)}</td><td>${fmt(p.price_open)}</td><td>${fmt(p.sl)}</td><td class="${p.profit>=0?'buy':'sell'}">${fmt(p.profit)}</td></tr>`
-    ).join("") : `<tr><td colspan="7" class="muted">Flat</td></tr>`;
+    const tickBid = Number(b.tick_bid != null ? b.tick_bid : bridge.tick_bid);
+    const tickAsk = Number(b.tick_ask != null ? b.tick_ask : bridge.tick_ask);
+    if ($("mOpenSlCount")) $("mOpenSlCount").textContent = String(pos.length);
+    if ($("mTicketSls")) {
+      $("mTicketSls").textContent = pos.length
+        ? pos.map(p => "#" + (p.ticket || "?") + " SL " + fmt(p.sl)).join(" · ")
+        : "flat";
+    }
+    $("posBody").innerHTML = pos.length ? pos.map(p => {
+      const entry = Number(p.price_open != null ? p.price_open : p.open_price);
+      const sl = Number(p.sl);
+      const side = String(p.side || "").toUpperCase();
+      let ptsToSl = null;
+      if (Number.isFinite(entry) && Number.isFinite(sl)) {
+        ptsToSl = side === "BUY" ? (entry - sl) : (sl - entry);
+      }
+      let cushion = null;
+      const mark = side === "BUY"
+        ? (Number.isFinite(tickBid) ? tickBid : null)
+        : (Number.isFinite(tickAsk) ? tickAsk : null);
+      if (mark != null && Number.isFinite(sl)) {
+        cushion = side === "BUY" ? (mark - sl) : (sl - mark);
+      }
+      const ptsTxt = ptsToSl == null ? "—" : (fmt(ptsToSl, 2)
+        + (cushion != null ? (" · mark " + fmt(cushion, 2)) : ""));
+      return `<tr>
+        <td>${p.ticket}</td>
+        <td class="kind-${p.kind||'OTHER'}">${p.kind||"—"}</td>
+        <td class="${side==='BUY'?'buy':'sell'}">${side||"—"}</td>
+        <td>${fmt(p.volume,2)}</td>
+        <td>${fmt(entry)}</td>
+        <td><strong>${fmt(sl)}</strong></td>
+        <td>${ptsTxt}</td>
+        <td class="${Number(p.profit)>=0?'buy':'sell'}">${fmt(p.profit)}</td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="8" class="muted">Flat — no live trailing SL</td></tr>`;
 
     const trades = enrichTradesWithLivePnl(sessionTrades(b).filter(t => {
       const k = String(t.kind || "").toUpperCase();
@@ -1761,6 +1850,49 @@ async function load() {
         <td>${t.ticket||t.position_id||""}</td>
       </tr>`
     ).join("") : `<tr><td colspan="11" class="muted">No MT5 trades in this session yet</td></tr>`;
+
+    // Bottom P&L detail: entry, exit, diff pts, $ P/L, lot
+    const pnlRows = trades.slice().reverse();
+    const closedPnl = pnlRows.filter(t => !t._live_float);
+    const netClosed = closedPnl.reduce((s, t) => s + (Number(t.profit) || 0), 0);
+    if ($("pnlDetailSummary")) {
+      $("pnlDetailSummary").textContent = pnlRows.length
+        ? (pnlRows.length + " trades · closed net " + (netClosed >= 0 ? "+" : "") + fmt(netClosed)
+          + " · " + closedPnl.filter(t => Number(t.profit) > 0).length + " wins / "
+          + closedPnl.filter(t => Number(t.profit) < 0).length + " losses")
+        : "No trades yet";
+    }
+    if ($("pnlDetailBody")) {
+      $("pnlDetailBody").innerHTML = pnlRows.length ? pnlRows.map((t, i) => {
+        const side = String(t.side || "").toUpperCase();
+        const entry = Number(t.open_price);
+        let exitPx = Number(t.close_price);
+        if (!Number.isFinite(exitPx) && t._live_float) {
+          exitPx = side === "BUY"
+            ? (Number.isFinite(tickBid) ? tickBid : NaN)
+            : (Number.isFinite(tickAsk) ? tickAsk : NaN);
+        }
+        let diff = null;
+        if (Number.isFinite(entry) && Number.isFinite(exitPx)) {
+          diff = side === "BUY" ? (exitPx - entry) : (entry - exitPx);
+        }
+        const status = t._live_float ? "OPEN (live)" : (exitReason(t) || "closed");
+        const pnl = Number(t.profit);
+        return `<tr>
+          <td>${i + 1}</td>
+          <td class="kind-${t.kind||'OTHER'}">${t.kind||"—"}</td>
+          <td class="${side==='BUY'?'buy':'sell'}">${side||"—"}</td>
+          <td>${(t.open_time||"").replace("T"," ").slice(0,19)}</td>
+          <td>${(t.close_time||"").replace("T"," ").slice(0,19) || (t._live_float ? "OPEN" : "—")}</td>
+          <td>${fmt(t.volume, 2)}</td>
+          <td>${fmt(entry)}</td>
+          <td>${fmt(exitPx)}</td>
+          <td class="${diff != null && diff >= 0 ? 'buy' : 'sell'}">${diff == null ? "—" : ((diff >= 0 ? "+" : "") + fmt(diff, 3))}</td>
+          <td class="${pnl >= 0 ? 'buy' : 'sell'}">${(pnl >= 0 ? "+" : "") + fmt(pnl)}${t._live_float ? " live" : ""}</td>
+          <td>${status}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="11" class="muted">No trades yet</td></tr>`;
+    }
 
     $("barBody").innerHTML = allBars.length ? allBars.slice().reverse().map(x =>
       `<tr>
@@ -2097,6 +2229,30 @@ function downloadTradesCsv() {
 
 ["btnDlBars", "btnDlBars2"].forEach(id => { const el = $(id); if (el) el.onclick = downloadBarsCsv; });
 ["btnDlTrades", "btnDlTrades2"].forEach(id => { const el = $(id); if (el) el.onclick = downloadTradesCsv; });
+
+function downloadPnlDetailCsv() {
+  const rows = lastTrades ? lastTrades.slice().reverse() : [];
+  const lines = ["#,kind,side,open_time,close_time,lot,entry,exit,diff_pts,profit_usd,status"];
+  rows.forEach((t, i) => {
+    const side = String(t.side || "").toUpperCase();
+    const entry = Number(t.open_price);
+    const exitPx = Number(t.close_price);
+    let diff = "";
+    if (Number.isFinite(entry) && Number.isFinite(exitPx)) {
+      const d = side === "BUY" ? (exitPx - entry) : (entry - exitPx);
+      diff = d.toFixed(3);
+    }
+    lines.push([
+      i + 1, t.kind, side, t.open_time || "", t.close_time || "",
+      t.volume, t.open_price, t.close_price, diff, t.profit,
+      t._live_float ? "OPEN" : exitReason(t),
+    ].map(csvEscape).join(","));
+  });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const name = (DESK_TITLE || "desk").toLowerCase().replace(/[^a-z0-9]+/g, "_") + `_pnl_detail_${stamp}.csv`;
+  downloadTextFile(name, lines.join("\n"));
+}
+if ($("btnDlPnlDetail")) $("btnDlPnlDetail").onclick = downloadPnlDetailCsv;
 
 $("tabHb").onclick = () => {
   $("tabHb").className = "on"; $("tabDeals").className = ""; $("tabExec").className = "";
