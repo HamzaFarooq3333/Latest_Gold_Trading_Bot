@@ -32,7 +32,7 @@ All four run as hidden scheduled tasks (`scripts\register_tasks.ps1`). `START_BO
 | Item | Setting |
 |------|---------|
 | Entry | primary gate (body break + X-Trend clear) on **every** green/red candle, tickets stack (`ENTRY_EVERY_CANDLE=1`) |
-| Threshold | `HIST_THRESH=15` |
+| Threshold | `HIST_THRESH=10` (colour ±10); entry floor `HIST_ENTRY_THRESH=15` |
 | Stop | `1.25 × ATR(14)` per ticket, trails each close (`TSL_ATR_MULT=1.25`) |
 | Lot | `VOLUME=0.02`, `MAXPOS=20`, `MAX_SUPP=0` |
 | Filters | hour / weekend filters OFF |

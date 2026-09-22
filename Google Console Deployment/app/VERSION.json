@@ -1,13 +1,13 @@
-﻿{
-    "version":  "trail-live-2026-09-21",
-    "built_utc":  "2026-09-21T17:05:00Z",
-    "desk_deployed_utc":  "2026-09-20T18:37:22Z",
-    "engine":  "HA all rules; LEVERAGE 200",
-    "live_desk":  "https://35.253.21.246",
-    "notes":  "Ali bridge TRAIL_LIVE tick trailing; candle-close trail kept",
-    "gitops":  {
-                   "source_of_truth":  "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
-                   "agent":  "github_update_agent.py",
-                   "desk_redeploy":  "Hamza office watcher on any push"
-               }
+{
+  "version": "hist-color-10-2026-09-22",
+  "built_utc": "2026-09-22T17:30:00Z",
+  "desk_deployed_utc": "2026-09-21T06:56:14Z",
+  "engine": "HA all rules; LEVERAGE 200",
+  "live_desk": "https://35.253.21.246",
+  "notes": "Histogram colour \u00b110 (HIST_THRESH=10); entry floor still 15",
+  "gitops": {
+    "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
+    "agent": "github_update_agent.py",
+    "desk_redeploy": "Hamza office watcher on any push"
+  }
 }
