@@ -918,9 +918,9 @@ Lot    : VOLUME (live 0.02)   ·   Leverage : 1:200   ·   Block add if margin l
             <label>Entry fill</label>
             <select id="btFillMode" style="min-width:320px">
               <option value="body" selected>Previous HA body level (break price; walk-forward reports)</option>
-              <option value="close">HA bar close — closest to live, where the market order goes out when the bar closes</option>
+              <option value="close">Market close (live-like) — real close of the decision bar for entries AND amber/stop-out flattens; what the bridge actually pays</option>
             </select>
-            <span class="hint">Every rule, fill, stop and the ATR run on the Heikin-Ashi candle (raw MT5 bars are converted first). Live fills at the real ask/bid when the bar closes, so "HA bar close" is the pessimistic, live-like choice.</span>
+            <span class="hint">Every rule, stop and the ATR run on the Heikin-Ashi candle (raw MT5 bars are converted first). Fills are a separate question: live orders go out at the real market price when the bar closes, so "Market close" is the honest, live-like choice. "Previous HA body" is the optimistic report convention (it was verified 2026-09-22 to overstate results heavily: the HA close lags the market).</span>
           </div>
           <div class="row"><label>initial capital</label><input id="btStart" type="number" step="any" value="2000" /></div>
           <div class="row"><label>leverage</label><input id="btLev" type="number" step="any" value="200" /></div>
@@ -3668,8 +3668,10 @@ Short is the mirror.</div>
       const fillAtClose = cfg.fillMode === "close";
       // Fill level on the HA candle: previous HA body, or this HA open on a gap.
       // (Live fills at the real ask/bid; this is the backtest convention.)
+      // Live-like: the real close (market order at bar close). rawClose == close when the file had no raw columns.
+      const mktClose = (b) => Number.isFinite(b.rawClose) ? b.rawClose : b.close;
       const crossFill = (b, prev, want) => {
-        if (fillAtClose) return b.close;
+        if (fillAtClose) return mktClose(b);
         if (want > 0) {
           const lvl = Math.max(prev.open, prev.close);
           if (b.open > lvl) return b.open;
@@ -3695,7 +3697,7 @@ Short is the mirror.</div>
         return want > 0 ? b.high > level : b.low < level;
       };
       const wickFill = (b, level, want) => {
-        if (fillAtClose) return b.close;
+        if (fillAtClose) return mktClose(b);
         const lvl = Number(level);
         if (want > 0) return b.open > lvl ? b.open : lvl;
         return b.open < lvl ? b.open : lvl;
@@ -3744,7 +3746,8 @@ Short is the mirror.</div>
 
       for (let i = 1; i < n; i++) {
         if (!alive) break;
-        const b = bars[i], prev = bars[i - 1], px = b.close, zz = b.zone;  // HA close trails / marks
+        const b = bars[i], prev = bars[i - 1], px = b.close, zz = b.zone;  // HA close trails the stops
+        const flatPx = fillAtClose ? mktClose(b) : px;  // flattens: market close in live-like mode
         const lot = lotFor(b.t);
         let barFlatReason = null;
         bars[i].sl = null;
@@ -3770,12 +3773,12 @@ Short is the mirror.</div>
           applyStops(i, b);
 
           if (positions.length && zz === 0) {
-            flatten(i, px, "amber"); runSide = 0; seenAmber = true;
+            flatten(i, flatPx, "amber"); runSide = 0; seenAmber = true;
             barFlatReason = "Orange histogram — flatten all positions (no new entries on amber)";
           } else if (positions.length) {
             if (trailEveryCandle) for (const p of positions) p.sl = trailSl(p.sl, px, side, p.tsl);
             if (positions.length && mLevel(px) < BT_STOPOUT) {
-              flatten(i, px, "stopout"); runSide = 0;
+              flatten(i, flatPx, "stopout"); runSide = 0;
               barFlatReason = "Margin level stop-out — equity below maintenance";
               if (bal <= 1) alive = false;
             }
@@ -3862,7 +3865,7 @@ Short is the mirror.</div>
 
         equity.push({ t: b.t, time: b.time, equity: bal + floating(px), banked: bal, floating: floating(px) });
       }
-      if (positions.length) flatten(n - 1, bars[n - 1].close, "eod");
+      if (positions.length) flatten(n - 1, fillAtClose ? mktClose(bars[n - 1]) : bars[n - 1].close, "eod");
       const suppClosed = closed.filter(x => x.isSupp);
       return {
         closed, fills, equity, alive, bal, adds, blocked, xtSkip, hourSkip,
