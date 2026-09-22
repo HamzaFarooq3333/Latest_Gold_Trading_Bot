@@ -50,6 +50,12 @@
   td { font-family: var(--mono); }
   .scroll { max-height: 280px; overflow: auto; }
   .scroll.tall { max-height: 420px; }
+  .scroll.trades { max-height: 720px; }
+  tr.day-banner td {
+    background: #1a2430; color: var(--accent); font-family: var(--sans, inherit);
+    font-size: .72rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    border-bottom: 1px solid var(--line); padding: .55rem .35rem;
+  }
   .buy { color: var(--ok); } .sell { color: var(--bad); } .amber { color: var(--amber); }
   .kind-PRIMARY { color: var(--accent); } .kind-SUPP { color: var(--warn); }
   button {
@@ -326,12 +332,12 @@
   </section>
 
   <section class="card span2">
-    <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (this session)</h2>
+    <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (all kept days)</h2>
     <div class="row-actions" style="margin-bottom:.45rem">
-      <span class="muted" style="flex:1;font-size:.78rem">Candles &amp; trades from 20 Sep 2026 onward (nothing earlier). Clear desk cache keeps that floor.</span>
+      <span class="muted" style="flex:1;font-size:.78rem" id="tradeListSummary">All PRIMARY / SUPP fills from the history floor onward — today and yesterday stay listed; nothing auto-wipes at midnight.</span>
       <button type="button" id="btnDlTrades2">Download trades CSV</button>
     </div>
-    <div class="scroll tall">
+    <div class="scroll trades">
       <table>
         <thead>
           <tr>
@@ -345,13 +351,13 @@
   </section>
 
   <section class="card span2" id="analysis">
-    <h2>Analysis (since reset)</h2>
+    <h2>Analysis (all kept fills)</h2>
     <div class="metrics" id="anMetrics"></div>
   </section>
 
   <section class="card span2">
     <h2>Live candles — MT5 feed</h2>
-    <div class="legend">Full live MT5 candle history for the chart. Why = rule-based reason for trade / no-trade on that bar. Trades table below is this session only.</div>
+    <div class="legend">Full live MT5 candle history for the chart. Why = rule-based reason for trade / no-trade on that bar. Trade tables keep every day from the history floor (including yesterday) — not chart-window only.</div>
     <div class="row-actions" style="margin-bottom:.45rem">
       <button type="button" id="btnDlBars2">Download bars CSV</button>
     </div>
@@ -481,14 +487,14 @@
   <section class="card span2">
     <h2>Trade P&amp;L detail — entry · exit · difference · profit/loss · lot</h2>
     <div class="legend">
-      Every PRIMARY / SUPP fill this session. Difference = price move in your favour (+) or against (−) in points.
-      Closed trades use exit price; open trades use live mark and show floating P/L.
+      Every kept PRIMARY / SUPP fill (yesterday + today + earlier floor days). Difference = price move in your favour (+) or against (−) in points.
+      Closed trades use exit price; open trades use live mark and show floating P/L. No daily auto-reset.
     </div>
     <div class="row-actions" style="margin-bottom:.45rem">
       <span class="muted" style="flex:1;font-size:.78rem" id="pnlDetailSummary">—</span>
       <button type="button" id="btnDlPnlDetail">Download this table CSV</button>
     </div>
-    <div class="scroll tall">
+    <div class="scroll trades">
       <table>
         <thead>
           <tr>
@@ -1217,6 +1223,64 @@ function sessionTrades(broker) {
   );
 }
 
+/** All PRIMARY/SUPP fills kept on the desk — never clip to "today only" or chart window. */
+function allKeptTrades(broker) {
+  return sessionTrades(broker).filter((t) => {
+    const k = String(t.kind || "").toUpperCase();
+    return k === "PRIMARY" || k === "SUPP";
+  });
+}
+
+function tradeUtcDay(t) {
+  const raw = t?.open_time || t?.time || t?.close_time || "";
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return "unknown";
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function dayBannerLabel(dayKey) {
+  if (!dayKey || dayKey === "unknown") return "Unknown day";
+  const today = new Date().toISOString().slice(0, 10);
+  const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  if (dayKey === today) return `Today · ${dayKey} UTC`;
+  if (dayKey === y) return `Yesterday · ${dayKey} UTC`;
+  return `${dayKey} UTC`;
+}
+
+function summarizeTradesByDay(trades) {
+  const counts = {};
+  for (const t of trades || []) {
+    const d = tradeUtcDay(t);
+    counts[d] = (counts[d] || 0) + 1;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const parts = [];
+  parts.push(`${(trades || []).length} kept`);
+  if (counts[today]) parts.push(`today ${counts[today]}`);
+  if (counts[y]) parts.push(`yesterday ${counts[y]}`);
+  const older = Object.keys(counts).filter((d) => d !== today && d !== y && d !== "unknown").sort();
+  for (const d of older) parts.push(`${d} ${counts[d]}`);
+  return parts.join(" · ");
+}
+
+/** Render trade rows newest-first with a day banner when the UTC day changes. */
+function renderTradeRowsWithDays(trades, rowHtml, colSpan) {
+  if (!trades || !trades.length) return "";
+  const newestFirst = trades.slice().reverse();
+  let lastDay = null;
+  const parts = [];
+  for (const t of newestFirst) {
+    const day = tradeUtcDay(t);
+    if (day !== lastDay) {
+      lastDay = day;
+      parts.push(`<tr class="day-banner"><td colspan="${colSpan}">${dayBannerLabel(day)}</td></tr>`);
+    }
+    parts.push(rowHtml(t));
+  }
+  return parts.join("");
+}
+
 let markerAnchorByTicket = new Map(); // position/ticket → locked M15 unix (never moves)
 let lastMarkerSignature = "";
 
@@ -1602,7 +1666,11 @@ function renderAnalysis(a, account) {
 }
 
 async function resetSession() {
-  if (!confirm("Clear the live desk cache and start a fresh session?\nMT5 account balance stays as-is.")) return;
+  if (!confirm(
+    "WARNING: This clears the live desk trade/candle cache.\n" +
+    "Yesterday and today fills disappear from the dashboard until the bridge re-publishes them.\n" +
+    "MT5 account balance is untouched.\n\nOnly continue if you really intend to wipe the desk view."
+  )) return;
   $("btnReset").disabled = true;
   try {
     const r = await fetch("/api/broker/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -1827,15 +1895,14 @@ async function load() {
       </tr>`;
     }).join("") : `<tr><td colspan="8" class="muted">Flat — no live trailing SL</td></tr>`;
 
-    const trades = enrichTradesWithLivePnl(sessionTrades(b).filter(t => {
-      const k = String(t.kind || "").toUpperCase();
-      if (k !== "PRIMARY" && k !== "SUPP") return false;
-      const ts = Date.parse(t.open_time || t.time || t.close_time || "");
-      // Same M15 floor as candles so same-bar fills stay visible after a wipe.
-      return Number.isFinite(ts) && ts >= barStartMs;
-    }), pos).slice().reverse();
-    lastTrades = trades;
-    $("tradeBody").innerHTML = trades.length ? trades.map(t =>
+    const trades = enrichTradesWithLivePnl(allKeptTrades(b), pos);
+    lastTrades = trades.slice().reverse();
+    if ($("tradeListSummary")) {
+      $("tradeListSummary").textContent = trades.length
+        ? (summarizeTradesByDay(trades) + " — kept from history floor; no daily wipe")
+        : "No PRIMARY / SUPP fills yet — history is kept across days (no midnight reset)";
+    }
+    $("tradeBody").innerHTML = trades.length ? renderTradeRowsWithDays(trades, (t) =>
       `<tr>
         <td class="kind-${t.kind||'OTHER'}">${t.kind||"—"}</td>
         <td class="${t.side==='BUY'?'buy':'sell'}">${t.side||""}</td>
@@ -1849,21 +1916,28 @@ async function load() {
         <td>${t.open_comment||""}${t.sl_comment ? (" / " + t.sl_comment) : ""}</td>
         <td>${t.ticket||t.position_id||""}</td>
       </tr>`
-    ).join("") : `<tr><td colspan="11" class="muted">No MT5 trades in this session yet</td></tr>`;
+    , 11) : `<tr><td colspan="11" class="muted">No MT5 trades kept yet</td></tr>`;
 
-    // Bottom P&L detail: entry, exit, diff pts, $ P/L, lot
-    const pnlRows = trades.slice().reverse();
+    // Bottom P&L detail: every kept day — entry, exit, diff pts, $ P/L, lot
+    const pnlRows = trades.slice(); // oldest → newest for numbered rows
     const closedPnl = pnlRows.filter(t => !t._live_float);
     const netClosed = closedPnl.reduce((s, t) => s + (Number(t.profit) || 0), 0);
     if ($("pnlDetailSummary")) {
       $("pnlDetailSummary").textContent = pnlRows.length
-        ? (pnlRows.length + " trades · closed net " + (netClosed >= 0 ? "+" : "") + fmt(netClosed)
+        ? (summarizeTradesByDay(pnlRows) + " · closed net " + (netClosed >= 0 ? "+" : "") + fmt(netClosed)
           + " · " + closedPnl.filter(t => Number(t.profit) > 0).length + " wins / "
           + closedPnl.filter(t => Number(t.profit) < 0).length + " losses")
         : "No trades yet";
     }
     if ($("pnlDetailBody")) {
-      $("pnlDetailBody").innerHTML = pnlRows.length ? pnlRows.map((t, i) => {
+      const chronoNo = new Map();
+      pnlRows.forEach((t, i) => {
+        const key = String(t.ticket || t.position_id || `${t.open_time}|${t.side}|${t.open_price}|${t.kind}`);
+        if (!chronoNo.has(key)) chronoNo.set(key, i + 1);
+      });
+      $("pnlDetailBody").innerHTML = pnlRows.length ? renderTradeRowsWithDays(pnlRows, (t) => {
+        const key = String(t.ticket || t.position_id || `${t.open_time}|${t.side}|${t.open_price}|${t.kind}`);
+        const num = chronoNo.get(key) || "—";
         const side = String(t.side || "").toUpperCase();
         const entry = Number(t.open_price);
         let exitPx = Number(t.close_price);
@@ -1879,7 +1953,7 @@ async function load() {
         const status = t._live_float ? "OPEN (live)" : (exitReason(t) || "closed");
         const pnl = Number(t.profit);
         return `<tr>
-          <td>${i + 1}</td>
+          <td>${num}</td>
           <td class="kind-${t.kind||'OTHER'}">${t.kind||"—"}</td>
           <td class="${side==='BUY'?'buy':'sell'}">${side||"—"}</td>
           <td>${(t.open_time||"").replace("T"," ").slice(0,19)}</td>
@@ -1891,7 +1965,7 @@ async function load() {
           <td class="${pnl >= 0 ? 'buy' : 'sell'}">${(pnl >= 0 ? "+" : "") + fmt(pnl)}${t._live_float ? " live" : ""}</td>
           <td>${status}</td>
         </tr>`;
-      }).join("") : `<tr><td colspan="11" class="muted">No trades yet</td></tr>`;
+      }, 11) : `<tr><td colspan="11" class="muted">No trades yet</td></tr>`;
     }
 
     $("barBody").innerHTML = allBars.length ? allBars.slice().reverse().map(x =>
