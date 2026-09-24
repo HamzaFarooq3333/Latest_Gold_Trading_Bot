@@ -10,7 +10,8 @@ from urllib.parse import quote
 
 from fastapi import Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 import auth
 import broker_live
@@ -137,6 +138,9 @@ def _broker_handle(method: str, path: str, body: dict | None = None):
     if out is None:
         return _json_response(404, {"error": "not found", "path": path})
     return out   # broker_live builds the response through _lambda_response
+
+
+app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
 @app.get("/login")

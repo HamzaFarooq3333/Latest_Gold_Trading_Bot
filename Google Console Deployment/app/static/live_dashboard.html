@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>__DESK_TITLE__ — MT5 live</title>
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 <style>
   :root {
     --bg: #0f1419; --panel: #1a222d; --line: #2a3544; --text: #e7ecf3;
@@ -1847,8 +1847,6 @@ async function load() {
       : "waiting for closed MT5 bar";
 
     const pos = b.positions || [];
-    const tickBid = Number(b.tick_bid != null ? b.tick_bid : bridge.tick_bid);
-    const tickAsk = Number(b.tick_ask != null ? b.tick_ask : bridge.tick_ask);
     if ($("mOpenSlCount")) $("mOpenSlCount").textContent = String(pos.length);
     if ($("mTicketSls")) {
       $("mTicketSls").textContent = pos.length
