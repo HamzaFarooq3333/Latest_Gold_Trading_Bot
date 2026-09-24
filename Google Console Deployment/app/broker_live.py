@@ -356,9 +356,9 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
             broker["trades"] = merged
             broker["trade_history"] = merged
         # Drop pre-session history the bridge re-pushes (keep current M15 open onward).
-        broker["bars"] = _trim(_after_session(broker.get("bars"), bar_cutoff), 240)
+        broker["bars"] = _trim(_after_session(broker.get("bars"), bar_cutoff), 900)
         broker["ohlc_records"] = _trim(
-            _after_session(broker.get("ohlc_records"), bar_cutoff), 500
+            _after_session(broker.get("ohlc_records"), bar_cutoff), 900
         )
         # Keep bar_history in sync so older UIs that only read bar_history still work.
         if broker.get("bars"):
@@ -386,7 +386,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                         "forming": row.get("forming"),
                     }
                 )
-            broker["bars"] = _trim(synthesized, 240)
+            broker["bars"] = _trim(synthesized, 900)
             broker["bar_history"] = list(broker["bars"])
         else:
             broker["bar_history"] = []
