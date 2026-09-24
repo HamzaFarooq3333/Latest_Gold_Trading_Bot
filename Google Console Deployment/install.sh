@@ -8,25 +8,52 @@ DEPLOY_ROOT="$(cd "$(dirname "$0")" && pwd)"
 echo "[asim-gcp] installing to ${APP_DIR} from ${DEPLOY_ROOT}"
 sudo apt-get update -y
 sudo apt-get install -y python3-venv python3-pip rsync curl nginx openssl
-sudo mkdir -p "${APP_DIR}/data" "${APP_DIR}/bridge-bundle"
-sudo rsync -a --delete "${DEPLOY_ROOT}/app/" "${APP_DIR}/"
-sudo mkdir -p "${APP_DIR}/certs"
+sudo mkdir -p "${APP_DIR}/data" "${APP_DIR}/bridge-bundle" "${APP_DIR}/certs"
+
+# Never wipe live desk data, TLS certs, venv, or .env on redeploy.
+# A plain `rsync --delete app/ -> APP_DIR/` deleted lab_store + certs (2026-09-24 outage).
+sudo rsync -a --delete \
+  --exclude 'data/' \
+  --exclude 'certs/' \
+  --exclude 'venv/' \
+  --exclude '.env' \
+  --exclude 'bridge-bundle/' \
+  "${DEPLOY_ROOT}/app/" "${APP_DIR}/"
+
 if [ -f "${DEPLOY_ROOT}/.env" ]; then
-  cp -f "${DEPLOY_ROOT}/.env" "${APP_DIR}/.env"
-elif [ -f "${DEPLOY_ROOT}/.env.example" ]; then
+  # Preserve AUTH_SECRET if the live .env already has one (keeps sessions valid).
+  if [ -f "${APP_DIR}/.env" ] && grep -q '^AUTH_SECRET=' "${APP_DIR}/.env"; then
+    OLD_SECRET="$(grep '^AUTH_SECRET=' "${APP_DIR}/.env" | head -1)"
+    cp -f "${DEPLOY_ROOT}/.env" "${APP_DIR}/.env"
+    if ! grep -q '^AUTH_SECRET=' "${APP_DIR}/.env"; then
+      echo "${OLD_SECRET}" >> "${APP_DIR}/.env"
+    else
+      # keep the running secret
+      tmp="$(mktemp)"
+      grep -v '^AUTH_SECRET=' "${APP_DIR}/.env" > "${tmp}"
+      echo "${OLD_SECRET}" >> "${tmp}"
+      mv "${tmp}" "${APP_DIR}/.env"
+    fi
+  else
+    cp -f "${DEPLOY_ROOT}/.env" "${APP_DIR}/.env"
+  fi
+elif [ -f "${DEPLOY_ROOT}/.env.example" ] && [ ! -f "${APP_DIR}/.env" ]; then
   cp -f "${DEPLOY_ROOT}/.env.example" "${APP_DIR}/.env"
 fi
-if ! grep -q '^AUTH_SECRET=' "${APP_DIR}/.env" 2>/dev/null; then
+if [ -f "${APP_DIR}/.env" ] && ! grep -q '^AUTH_SECRET=' "${APP_DIR}/.env" 2>/dev/null; then
   echo "AUTH_SECRET=$(openssl rand -hex 32)" >> "${APP_DIR}/.env"
 fi
-grep -q '^BEHIND_HTTPS=' "${APP_DIR}/.env" || echo "BEHIND_HTTPS=1" >> "${APP_DIR}/.env"
+grep -q '^BEHIND_HTTPS=' "${APP_DIR}/.env" 2>/dev/null || echo "BEHIND_HTTPS=1" >> "${APP_DIR}/.env"
 sudo chown -R "${USER}:${USER}" "${APP_DIR}"
 
-if [ ! -f "${APP_DIR}/certs/cert.pem" ]; then
+if [ ! -f "${APP_DIR}/certs/cert.pem" ] || [ ! -f "${APP_DIR}/certs/key.pem" ]; then
+  echo "[asim-gcp] generating new TLS cert (browser will warn once)"
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
     -keyout "${APP_DIR}/certs/key.pem" \
     -out "${APP_DIR}/certs/cert.pem" \
     -subj "/CN=asim-gcp/O=Onyxion"
+else
+  echo "[asim-gcp] keeping existing TLS certs"
 fi
 
 if [ ! -d "${APP_DIR}/venv" ]; then

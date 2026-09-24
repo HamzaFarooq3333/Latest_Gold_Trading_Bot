@@ -60,6 +60,9 @@ MAX_PENDING_ATTEMPTS = int(os.environ.get("MAX_PENDING_ATTEMPTS", "8"))
 STALE_ENTRY_SECONDS = float(os.environ.get("STALE_ENTRY_SECONDS", "180"))
 # Closed-bar window the indicators are seeded from (matches the MQ5 indicators).
 MT5_CALC_WINDOW = 160
+# Candles published to the GCP desk TradingView (~8 days of M15).
+# Desk merges/retains these; trading decisions still use MT5_CALC_WINDOW.
+CHART_HISTORY_BARS = 800
 MT5_XTREND_PERIOD = 6
 MT5_XTREND_MULT = 0.8
 MAX_LOCAL_BAR_RECORDS = 20000
@@ -448,10 +451,11 @@ def _compute_xtrend(opens, highs, lows, closes, ha_h, ha_l, ha_c) -> tuple[list[
 def collect_bars(symbol: str, count: int = 96) -> list[dict]:
     """Last `count` M15 bars (HA signal + raw + hist + X-Trend), forming bar last.
 
-    Indicators are always seeded from MT5_CALC_WINDOW closed bars regardless
-    of how many rows are returned, matching the MQ5 indicators.
+    Fetch at least max(count, MT5_CALC_WINDOW) so chart history can exceed the
+    trading seed window. Prefer overlaying a short engine series for the live edge.
     """
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, MT5_CALC_WINDOW + 1)
+    fetch_n = max(int(count), int(MT5_CALC_WINDOW), 10)
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, fetch_n + 1)
     if rates is None or len(rates) < 10:
         return []
     opens = [float(r["open"]) for r in rates]
@@ -757,7 +761,14 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
     trades = build_trades_from_deals(orders)
     runtime = cfg.get("_mt5_runtime") or {}
     skip_times = [str(runtime["deploy_skip_bar"])] if runtime.get("deploy_skip_bar") else []
-    bars = annotate_bars(collect_bars(symbol, 120), trades, deploy_skip_times=skip_times)
+    chart_bars = collect_bars(symbol, CHART_HISTORY_BARS)
+    engine_bars = collect_bars(symbol, MT5_CALC_WINDOW)
+    by_time = {b.get("time"): b for b in chart_bars if b.get("time")}
+    for b in engine_bars:
+        if b.get("time"):
+            by_time[b["time"]] = b  # live edge matches trading seed
+    merged_bars = [by_time[k] for k in sorted(by_time)]
+    bars = annotate_bars(merged_bars, trades, deploy_skip_times=skip_times)
     decision_records = runtime.get("decision_records") or []
     by_bar = {str(r.get("bar_time")): r for r in decision_records if r.get("bar_time")}
     for bar in bars:
@@ -809,7 +820,7 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
         "xtrend": bar.get("xtrend"), "hist": bar.get("hist"), "zone": bar.get("zone") or bar.get("histcolor"),
         "action": bar.get("action"),
         "sl": live.get("sl_updated") if bar is bars[-1] else bar.get("sl"), "forming": bar.get("forming"),
-    } for bar in bars[-120:]]
+    } for bar in bars[-CHART_HISTORY_BARS:]]
     xt_source = (bars[-1].get("xtrend_source") if bars else None) or os.environ.get("XTREND_SOURCE") or "supertrend"
     bridge = {
         "host": socket.gethostname(), "poll_seconds": cfg.get("poll"), "model": cfg.get("model"),
