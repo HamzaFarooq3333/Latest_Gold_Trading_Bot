@@ -1,10 +1,10 @@
 {
-  "version": "chart-week-800-2026-09-24",
-  "built_utc": "2026-09-24T16:50:00Z",
+  "version": "hist-color-10-2026-09-22",
+  "built_utc": "2026-09-22T17:30:00Z",
   "desk_deployed_utc": null,
   "engine": "HA rules; HIST_THRESH colour ±10; HIST_ENTRY_THRESH 15; TRAIL_LIVE; LEVERAGE 200",
   "live_desk": "https://35.253.21.246",
-  "notes": "Publish 800 M15 candles (~8 days) to the desk so /live shows this week. Trading window stays MT5_CALC_WINDOW=160.",
+  "notes": "Histogram colour green/red at ±10 (not ±15). Entry floor stays HIST_ENTRY_THRESH=15. Desk controls saved HIST_THRESH=10.",
   "gitops": {
     "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
     "agent": "github_update_agent.py",

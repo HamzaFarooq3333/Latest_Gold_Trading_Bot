@@ -38,7 +38,7 @@ from pathlib import Path
 import MetaTrader5 as mt5
 
 import mt5_live_engine
-    from mt5_live_engine import Mt5LiveEngine
+from mt5_live_engine import Mt5LiveEngine
 
 HERE = Path(__file__).resolve().parent
 # Install root is flat (C:\onyxion-ali\bridge_trader.py next to .env); in the
@@ -59,11 +59,7 @@ MAX_PENDING_ATTEMPTS = int(os.environ.get("MAX_PENDING_ATTEMPTS", "8"))
 # a stale HA close.
 STALE_ENTRY_SECONDS = float(os.environ.get("STALE_ENTRY_SECONDS", "180"))
 # Closed-bar window the indicators are seeded from (matches the MQ5 indicators).
-# Do not raise this for the trading loop — it changes live HA / histogram.
 MT5_CALC_WINDOW = 160
-# Candles published to /live. ~8 days of M15 so the desk can show the week
-# (and 20 Sep onward). Trading decisions still use MT5_CALC_WINDOW only.
-CHART_HISTORY_BARS = 800
 MT5_XTREND_PERIOD = 6
 MT5_XTREND_MULT = 0.8
 MAX_LOCAL_BAR_RECORDS = 20000
@@ -182,23 +178,23 @@ def _prune_old_logs(now: datetime) -> None:
 # --------------------------------------------------------------------------- #
 
 def build_cfg(env: dict) -> dict:
-        lab_raw = (env.get("ASIM_LAB_URL") or "").strip()
-        if not lab_raw:
+    lab_raw = (env.get("ASIM_LAB_URL") or "").strip()
+    if not lab_raw:
         raise SystemExit("ASIM_LAB_URL is required in .env (the GCP live desk, e.g. https://35.253.21.246)")
-        return {
-            "model": "ASIM",
-            "login": int(env["ASIM_MT5_LOGIN"]),
-            "password": env["ASIM_MT5_PASSWORD"],
-            "server": env["ASIM_MT5_SERVER"],
-            "magic": int(env.get("MT5_MAGIC_ASIM", "126823")),
-            "lab_url": lab_raw.rstrip("/") + "/",
+    return {
+        "model": "ASIM",
+        "login": int(env["ASIM_MT5_LOGIN"]),
+        "password": env["ASIM_MT5_PASSWORD"],
+        "server": env["ASIM_MT5_SERVER"],
+        "magic": int(env.get("MT5_MAGIC_ASIM", "126823")),
+        "lab_url": lab_raw.rstrip("/") + "/",
         "lot": float(env.get("VOLUME", env.get("ASIM_MT5_LOT", "0.01"))),
         "symbol": env.get("ASIM_MT5_SYMBOL", env.get("MT5_SYMBOL", "XAUUSDm")),
-            "deviation": int(env.get("MT5_DEVIATION", "30")),
-            "poll": int(env.get("MT5_POLL_SECONDS", "2")),
-            "terminal": env.get("ASIM_MT5_TERMINAL_PATH", env.get("MT5_TERMINAL_PATH", "")),
+        "deviation": int(env.get("MT5_DEVIATION", "30")),
+        "poll": int(env.get("MT5_POLL_SECONDS", "2")),
+        "terminal": env.get("ASIM_MT5_TERMINAL_PATH", env.get("MT5_TERMINAL_PATH", "")),
         "portable": env.get("ASIM_MT5_PORTABLE", env.get("MT5_PORTABLE", "1")).strip().lower() in ("1", "true", "yes", "on"),
-            "execution_source": "mt5_bars",
+        "execution_source": "mt5_bars",
         # Broker-side minimum stop distance (price units). The engine's stop is
         # never widened; only the value submitted to MT5 is clamped.
         "broker_min_stop_pts": float(env.get("BROKER_MIN_STOP_PTS", "0.30")),
@@ -266,8 +262,8 @@ def _lab_ssl_context():
     """GCP desks use a self-signed certificate; set ASIM_LAB_INSECURE=0 to verify."""
     ctx = ssl.create_default_context()
     if os.environ.get("ASIM_LAB_INSECURE", "1").strip().lower() not in ("0", "false", "no"):
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
@@ -449,16 +445,13 @@ def _compute_xtrend(opens, highs, lows, closes, ha_h, ha_l, ha_c) -> tuple[list[
     return _supertrend_ha(opens, highs, lows, closes, MT5_XTREND_PERIOD, MT5_XTREND_MULT), "supertrend_ha_6_0.8"
 
 
-def collect_bars(symbol: str, count: int = 96, fetch: int | None = None) -> list[dict]:
+def collect_bars(symbol: str, count: int = 96) -> list[dict]:
     """Last `count` M15 bars (HA signal + raw + hist + X-Trend), forming bar last.
 
-    Default fetch is MT5_CALC_WINDOW (live decisions). Chart snapshots pass
-    fetch=CHART_HISTORY_BARS so /live can show the week. A longer fetch changes
-    HA/hist on that series — the snapshot overlays the engine window on top.
+    Indicators are always seeded from MT5_CALC_WINDOW closed bars regardless
+    of how many rows are returned, matching the MQ5 indicators.
     """
-    fetch_n = int(fetch if fetch is not None else MT5_CALC_WINDOW)
-    fetch_n = max(fetch_n, int(count), 10)
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, fetch_n + 1)
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, MT5_CALC_WINDOW + 1)
     if rates is None or len(rates) < 10:
         return []
     opens = [float(r["open"]) for r in rates]
@@ -478,7 +471,7 @@ def collect_bars(symbol: str, count: int = 96, fetch: int | None = None) -> list
             "open": ha_o[i], "high": ha_h[i], "low": ha_l[i], "close": ha_c[i], "candle_type": "HA",
             "raw_open": opens[i], "raw_high": highs[i], "raw_low": lows[i], "raw_close": closes[i],
             "signal_open": ha_o[i], "signal_high": ha_h[i], "signal_low": ha_l[i], "signal_close": ha_c[i],
-                "forming": i == len(rates) - 1,
+            "forming": i == len(rates) - 1,
             "hist": round(h, 2), "histcolor": hist_color(h),
             "xtrend": round(float(xt[i]), 3), "xtrend_source": xt_source,
         })
@@ -580,7 +573,7 @@ def build_trades_from_deals(raw_deals: list[dict]) -> list[dict]:
     for d in raw_deals:
         pid = str(d.get("position_id") or d.get("order") or d.get("ticket") or "")
         if pid:
-        by_pos.setdefault(pid, []).append(d)
+            by_pos.setdefault(pid, []).append(d)
     trades = []
     for pid, deals in by_pos.items():
         deals = sorted(deals, key=lambda x: str(x.get("time") or ""))
@@ -662,9 +655,9 @@ def annotate_bars(bars: list[dict], trades: list[dict] | None = None, *,
         if bar_trades:
             action = ", ".join(f"{t.get('kind')} {t.get('side')}" for t in bar_trades)
             reasons.append(f"Trade taken: {action}")
-            elif zone == "amber":
+        elif zone == "amber":
             reasons.append("Amber histogram - flatten / no new entries")
-                    else:
+        else:
             buy = zone == "green"
             broke, clear = (broke_buy, xt_buy) if buy else (broke_sell, xt_sell)
             side = "BUY" if buy else "SELL"
@@ -672,7 +665,7 @@ def annotate_bars(bars: list[dict], trades: list[dict] | None = None, *,
                 reasons.append(f"SKIP {side}: did not break previous body ({body_hi if buy else body_lo})")
             elif not clear:
                 reasons.append(f"SKIP {side}: candle not clear of X-Trend ({xt})")
-                    else:
+            else:
                 reasons.append(f"Body + X-Trend gates OK for {side} - no deal on this bar"
                                + ("" if every else " (classic mode: needs amber arm / run state)"))
         bar_key = normalize_bar_time(b.get("time"))
@@ -731,7 +724,7 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
     magic = int(cfg["magic"])
     positions = [{
         "ticket": p.ticket, "side": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
-                "volume": p.volume,
+        "volume": p.volume,
         "open_time": datetime.fromtimestamp(int(getattr(p, "time", 0) or 0), tz=timezone.utc).isoformat()
         if getattr(p, "time", 0) else None,
         "price_open": p.price_open, "sl": p.sl, "tp": p.tp, "profit": p.profit,
@@ -753,7 +746,7 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
                 "position_id": int(getattr(d, "position_id", 0) or 0), "comment": comment,
                 "profit": d.profit, "commission": getattr(d, "commission", 0) or 0,
                 "magic": int(getattr(d, "magic", 0) or 0), "kind": trade_kind(comment),
-                    "entry": int(getattr(d, "entry", 0) or 0),
+                "entry": int(getattr(d, "entry", 0) or 0),
             })
         ours = [o for o in orders if o["magic"] == magic]
         orders = [o for o in enrich_deal_kinds(ours or orders)[-400:] if o.get("kind") in ("PRIMARY", "SUPP")]
@@ -764,14 +757,7 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
     trades = build_trades_from_deals(orders)
     runtime = cfg.get("_mt5_runtime") or {}
     skip_times = [str(runtime["deploy_skip_bar"])] if runtime.get("deploy_skip_bar") else []
-    chart_bars = collect_bars(symbol, CHART_HISTORY_BARS, fetch=CHART_HISTORY_BARS)
-    engine_bars = collect_bars(symbol, min(120, MT5_CALC_WINDOW))
-    by_time = {b.get("time"): b for b in chart_bars if b.get("time")}
-    for b in engine_bars:
-        if b.get("time"):
-            by_time[b["time"]] = b
-    merged_bars = [by_time[k] for k in sorted(by_time)]
-    bars = annotate_bars(merged_bars, trades, deploy_skip_times=skip_times)
+    bars = annotate_bars(collect_bars(symbol, 120), trades, deploy_skip_times=skip_times)
     decision_records = runtime.get("decision_records") or []
     by_bar = {str(r.get("bar_time")): r for r in decision_records if r.get("bar_time")}
     for bar in bars:
@@ -821,19 +807,19 @@ def collect_broker_snapshot(cfg: dict, symbol: str) -> dict:
         "raw_low": bar.get("raw_low"), "raw_close": bar.get("raw_close"),
         "ha_open": bar.get("open"), "ha_high": bar.get("high"), "ha_low": bar.get("low"), "ha_close": bar.get("close"),
         "xtrend": bar.get("xtrend"), "hist": bar.get("hist"), "zone": bar.get("zone") or bar.get("histcolor"),
-                "action": bar.get("action"),
+        "action": bar.get("action"),
         "sl": live.get("sl_updated") if bar is bars[-1] else bar.get("sl"), "forming": bar.get("forming"),
-    } for bar in bars[-CHART_HISTORY_BARS:]]
+    } for bar in bars[-120:]]
     xt_source = (bars[-1].get("xtrend_source") if bars else None) or os.environ.get("XTREND_SOURCE") or "supertrend"
     bridge = {
         "host": socket.gethostname(), "poll_seconds": cfg.get("poll"), "model": cfg.get("model"),
         "magic": magic, "expected_login": cfg.get("login"),
         "lot": mt5_live_engine.effective_volume(),
-            "live_controls": cfg.get("_live_controls") or {},
+        "live_controls": cfg.get("_live_controls") or {},
         "live_controls_source": cfg.get("_live_controls_source") or "env",
         "execution_source": "mt5_bars", "execution_mode": "MT5 BARS",
         "mt5_connection": "ONLINE", "connection_error": None,
-            "last_closed_bar": cfg.get("_mt5_last_closed_time"),
+        "last_closed_bar": cfg.get("_mt5_last_closed_time"),
         "engine_sl": live.get("sl_updated"), "engine_sl_changed": live.get("sl_changed"),
         "engine_mode": live.get("mode"),
         "hist_thresh": mt5_live_engine.effective_hist_thresh(),
@@ -933,8 +919,8 @@ def write_local_status(cfg: dict, snapshot: dict, heartbeat_ok: bool) -> None:
 def push_broker_heartbeat(cfg: dict, symbol: str) -> None:
     try:
         payload = collect_broker_snapshot(cfg, symbol)
-        except Exception as exc:
-            payload = offline_broker_snapshot(cfg, str(exc))
+    except Exception as exc:
+        payload = offline_broker_snapshot(cfg, str(exc))
     ok = False
     try:
         http_post_json(cfg["lab_url"].rstrip("/") + "/api/broker/heartbeat", payload, timeout=20)
@@ -1016,7 +1002,7 @@ def save_local_engine(engine: Mt5LiveEngine, runtime: dict, model: str) -> None:
     # for a few ms must not cost us the record of a sent entry.
     for attempt in range(5):
         try:
-    os.replace(tmp, state_file)
+            os.replace(tmp, state_file)
             return
         except PermissionError:
             if attempt == 4:
@@ -1166,7 +1152,7 @@ def engine_order_hints(result: dict, symbol: str, *, allow_entries: bool = True)
         if entry_sl is None:
             entry_sl = active_sl
         orders.append({
-                "actionType": "ORDER_TYPE_BUY" if "BUY" in filled else "ORDER_TYPE_SELL",
+            "actionType": "ORDER_TYPE_BUY" if "BUY" in filled else "ORDER_TYPE_SELL",
             "symbol": symbol, "volume": vol, "sl": entry_sl, "stopLoss": entry_sl,
             "kind": "PRIMARY" if filled in ("BUY", "SELL") else "SUPP", "engine_action": filled,
         })
@@ -1249,7 +1235,7 @@ def process_local_mt5_bar(cfg: dict, symbol: str, engine: Mt5LiveEngine, runtime
                                   had_broker_orders=True)
             if not abandon:
                 log(f"Pending MT5 bar still not filled bar={bar_key} attempt={attempts}/{MAX_PENDING_ATTEMPTS}")
-            return False
+                return False
             log(f"Abandoning stuck pending legs bar={bar_key} after {attempts} attempts - advancing engine")
         result = runtime.get("pending_result") or {}
     else:
@@ -1303,12 +1289,12 @@ def process_local_mt5_bar(cfg: dict, symbol: str, engine: Mt5LiveEngine, runtime
         "hist": result.get("hist"), "histcolor": result.get("histcolor"), "zone": result.get("zone"),
         "ha_side": result.get("ha_side"), "position": result.get("position"),
         "n_units": result.get("n_units"), "n_supp": result.get("n_supp"), "n_total": result.get("n_total"),
-            "execution_price_source": result.get("execution_price_source"),
+        "execution_price_source": result.get("execution_price_source"),
         "fill_price": result.get("fill_price"), "fill_sl": result.get("fill_sl"),
         "mode": result.get("mode"), "atr": result.get("atr"), "tsl_distance": result.get("tsl_distance"),
         "hour_utc4": result.get("hour_utc4"), "xt_skips": result.get("xt_skips"),
         "sl": result.get("sl_updated", result.get("sl")), "sl_updated": result.get("sl_updated"),
-            "orders": list(results or []),
+        "orders": list(results or []),
     })
     runtime["decision_records"] = runtime["decision_records"][-2048:]
     for k in ("pending_bar_time", "pending_result", "pending_attempts"):
@@ -1438,7 +1424,7 @@ def open_unit(symbol: str, side: str, lot: float, magic: int, deviation: int, mo
     req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": float(lot),
            "type": mt5.ORDER_TYPE_BUY if side == "LONG" else mt5.ORDER_TYPE_SELL,
            "price": tick.ask if side == "LONG" else tick.bid, "deviation": deviation, "magic": magic,
-        "comment": f"onyxion-{model.lower()}-{str(kind or 'OTHER').lower()}",
+           "comment": f"onyxion-{model.lower()}-{str(kind or 'OTHER').lower()}",
            "type_time": mt5.ORDER_TIME_GTC, "type_filling": filling_mode(symbol)}
     if sl is not None:
         req["sl"] = _broker_safe_sl(symbol, side, sl, configured_floor)
@@ -1494,7 +1480,7 @@ def execute_broker_order(cfg: dict, symbol: str, order: dict) -> tuple[bool, lis
     if kind in ENTRY_ORDER_TYPES:
         result = open_unit(symbol, "LONG" if kind == "ORDER_TYPE_BUY" else "SHORT",
                            float(order.get("volume") or cfg["lot"]), magic, deviation, cfg["model"],
-            sl=order.get("sl") if order.get("sl") is not None else order.get("stopLoss"),
+                           sl=order.get("sl") if order.get("sl") is not None else order.get("stopLoss"),
                            configured_floor=broker_floor, kind=order.get("kind") or "")
         log(f"  structured entry -> {result}")
         return bool(result.get("ok")), [result]
@@ -1745,10 +1731,10 @@ def sync_once(cfg: dict) -> None:
         raise RuntimeError(f"Symbol not found for {cfg['symbol']}")
     cfg["symbol_resolved"] = symbol
     if symbol != _LAST_SYMBOL_LOGGED:
-    info = mt5.symbol_info(symbol)
-    log(f"Symbol {symbol} digits={info.digits} point={info.point}")
+        info = mt5.symbol_info(symbol)
+        log(f"Symbol {symbol} digits={info.digits} point={info.point}")
         _LAST_SYMBOL_LOGGED = symbol
-        sync_once_mt5_bars(cfg, symbol)
+    sync_once_mt5_bars(cfg, symbol)
 
 
 def main():
@@ -1775,9 +1761,9 @@ def main():
 
     try:
         acquire_local_executor(cfg["model"])
-        except Exception:
-            mt5.shutdown()
-            raise
+    except Exception:
+        mt5.shutdown()
+        raise
     try:
         if args.once:
             sync_once(cfg)
@@ -1805,7 +1791,7 @@ def main():
                         log(f"MT5 reconnect pending: {reconnect_error}")
             time.sleep(cfg["poll"])
     finally:
-            release_local_executor()
+        release_local_executor()
         mt5.shutdown()
         log("MT5 shutdown")
 

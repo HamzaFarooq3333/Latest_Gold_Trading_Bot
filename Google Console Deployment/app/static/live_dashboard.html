@@ -332,9 +332,9 @@
   </section>
 
   <section class="card span2">
-    <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (20 Sep → now)</h2>
+    <h2>Trades — PRIMARY &amp; SUPPLEMENTARY (all kept days)</h2>
     <div class="row-actions" style="margin-bottom:.45rem">
-      <span class="muted" style="flex:1;font-size:.78rem" id="tradeListSummary">All PRIMARY / SUPP fills from 20 Sep 2026 00:00 PKT onward — no daily 9am wipe.</span>
+      <span class="muted" style="flex:1;font-size:.78rem" id="tradeListSummary">All PRIMARY / SUPP fills from the history floor onward — today and yesterday stay listed; nothing auto-wipes at midnight.</span>
       <button type="button" id="btnDlTrades2">Download trades CSV</button>
     </div>
     <div class="scroll trades">
@@ -357,7 +357,7 @@
 
   <section class="card span2">
     <h2>Live candles — MT5 feed</h2>
-    <div class="legend">This week’s candles and trades (from <strong>20 Sep 2026 00:00 PKT</strong> through now). Scroll the chart left for earlier days. No daily 9am reset.</div>
+    <div class="legend">Full live MT5 candle history for the chart. Why = rule-based reason for trade / no-trade on that bar. Trade tables keep every day from the history floor (including yesterday) — not chart-window only.</div>
     <div class="row-actions" style="margin-bottom:.45rem">
       <button type="button" id="btnDlBars2">Download bars CSV</button>
     </div>
@@ -487,8 +487,8 @@
   <section class="card span2">
     <h2>Trade P&amp;L detail — entry · exit · difference · profit/loss · lot</h2>
     <div class="legend">
-      Every PRIMARY / SUPP fill from <strong>20 Sep 2026 00:00 PKT</strong> till now. Difference = pts in your favour (+) or against (−).
-      Closed = exit price; open = live mark. No daily 9am wipe.
+      Every kept PRIMARY / SUPP fill (yesterday + today + earlier floor days). Difference = price move in your favour (+) or against (−) in points.
+      Closed trades use exit price; open trades use live mark and show floating P/L. No daily auto-reset.
     </div>
     <div class="row-actions" style="margin-bottom:.45rem">
       <span class="muted" style="flex:1;font-size:.78rem" id="pnlDetailSummary">—</span>
@@ -664,12 +664,6 @@ let chartReady = false;
 let sessionStartMs = null;
 let deskInfo = { leverage_label: "—", desk_version: "—", desk_deployed_utc: null };
 let deskInfoFetchedAt = 0;
-
-// Fixed history window for candles + trades on /live.
-// 20 Sep 2026 00:00 Pakistan (UTC+5) = 2026-09-19T19:00:00Z.
-// NEVER daily 9am, NEVER Date.now(), NEVER "today only".
-const DESK_HISTORY_FLOOR_ISO = "2026-09-20T00:00:00+05:00";
-const DESK_HISTORY_FLOOR_MS = Date.parse(DESK_HISTORY_FLOOR_ISO);
 
 function setText(id, text) {
   const el = $(id);
@@ -891,13 +885,31 @@ function initCharts() {
   chartReady = true;
 }
 
-// History window: ALWAYS pin to 20 Sep 2026 00:00 PKT for candles + trade tables.
-// Ignore a later session_started_at (auto-start NOW / daily 9am wipe) so the UI
-// keeps showing everything from the floor that is still in the payload.
-function historyStartMs(_broker) {
-  const floor = Number.isFinite(DESK_HISTORY_FLOOR_MS) ? DESK_HISTORY_FLOOR_MS : Date.parse("2026-09-19T19:00:00Z");
-  sessionStartMs = floor;
-  return floor;
+// History window: use the desk session clock when present. NEVER fall back to
+// Date.now() — that wiped the chart every time session_started_at was missing
+// after a redeploy. Prefer earliest bar in the payload, else show everything.
+function historyStartMs(broker) {
+  const fromBroker = Date.parse(broker?.session_started_at || "");
+  if (Number.isFinite(fromBroker)) {
+    sessionStartMs = fromBroker;
+    return fromBroker;
+  }
+  const pools = []
+    .concat(broker?.bars || [])
+    .concat(broker?.bar_history || [])
+    .concat(broker?.ohlc_records || []);
+  let earliest = null;
+  for (const b of pools) {
+    const t = Date.parse(b?.time || "");
+    if (Number.isFinite(t) && (earliest == null || t < earliest)) earliest = t;
+  }
+  if (earliest != null) {
+    sessionStartMs = earliest;
+    return earliest;
+  }
+  if (sessionStartMs != null) return sessionStartMs;
+  sessionStartMs = 0;
+  return 0;
 }
 
 let lastAccountSnap = { profit: null, equity: null, balance: null };
@@ -1664,8 +1676,7 @@ async function resetSession() {
     const r = await fetch("/api/broker/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || "reset failed");
-    // Keep UI floor on 20 Sep even if API returns a later wipe clock.
-    sessionStartMs = DESK_HISTORY_FLOOR_MS;
+    sessionStartMs = Date.parse(d.session_started_at || "") || Date.now();
     lastBars = [];
     lastTrades = [];
     lastSlTrail = [];
@@ -1888,8 +1899,8 @@ async function load() {
     lastTrades = trades.slice().reverse();
     if ($("tradeListSummary")) {
       $("tradeListSummary").textContent = trades.length
-        ? (summarizeTradesByDay(trades) + " — from 20 Sep 2026 00:00 PKT; no daily 9am wipe")
-        : "No PRIMARY / SUPP fills yet — floor is 20 Sep 2026 00:00 PKT (no daily 9am wipe)";
+        ? (summarizeTradesByDay(trades) + " — kept from history floor; no daily wipe")
+        : "No PRIMARY / SUPP fills yet — history is kept across days (no midnight reset)";
     }
     $("tradeBody").innerHTML = trades.length ? renderTradeRowsWithDays(trades, (t) =>
       `<tr>
