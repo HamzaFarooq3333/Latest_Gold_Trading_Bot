@@ -151,7 +151,7 @@ def login_page():
 
 
 @app.post("/api/auth/login")
-def auth_login(body: dict = Body(default_factory=dict)):
+def auth_login(request: Request, body: dict = Body(default_factory=dict)):
     username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
     remember = bool(body.get("remember"))
@@ -165,13 +165,20 @@ def auth_login(body: dict = Body(default_factory=dict)):
         max_age=ttl,
         httponly=True,
         samesite="lax",
-        secure=request_is_https_hint(),
+        # Only mark Secure when this request is actually HTTPS — HTTP desk
+        # access (IP + self-signed) must keep a non-Secure cookie or login loops.
+        secure=request_is_https(request),
     )
     return resp
 
 
+def request_is_https(request: Request) -> bool:
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+    return proto == "https"
+
+
 def request_is_https_hint() -> bool:
-    # Cookie Secure flag when served behind nginx TLS terminator.
+    # Legacy helper — prefer request_is_https(request) at call sites.
     return os.environ.get("BEHIND_HTTPS", "1") == "1"
 
 
