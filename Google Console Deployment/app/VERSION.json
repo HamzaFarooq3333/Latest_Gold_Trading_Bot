@@ -1,10 +1,10 @@
 {
-  "version": "keep-yesterday-trades-2026-09-22",
-  "built_utc": "2026-09-22T18:20:00Z",
+  "version": "desk-merge-bars-2026-09-24",
+  "built_utc": "2026-09-24T17:00:00Z",
   "desk_deployed_utc": null,
   "engine": "HA rules; HIST_THRESH colour ±10; TRAIL_LIVE; LEVERAGE 200",
   "live_desk": "https://35.253.21.246",
-  "notes": "Live dashboard: list all kept PRIMARY/SUPP fills including yesterday (day banners); do not clip trade tables to chart window; no daily wipe.",
+  "notes": "Desk-only: merge/retain M15 candles (bridge still posts ~120). Floor 20 Sep PKT. No Ali runtime change.",
   "gitops": {
     "source_of_truth": "https://github.com/HamzaFarooq3333/Latest_Gold_Trading_Bot",
     "agent": "github_update_agent.py",

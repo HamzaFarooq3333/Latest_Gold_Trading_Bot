@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 MAX_ITEMS = 512
 EXPECTED_LOGIN = int(os.environ.get("EXPECTED_MT5_LOGIN", "0") or 0)
 EXPECTED_SYMBOL = os.environ.get("EXPECTED_MT5_SYMBOL", "XAUUSDm")
+# Desk chart/trade history floor — never daily 9am, never auto-NOW.
+_PKT = timezone(timedelta(hours=5))
+_DEFAULT_HISTORY_FLOOR = datetime(2026, 9, 20, 0, 0, 0, tzinfo=_PKT)
 
 # Live controls the bridge honours. The desk only stores them; the bridge
 # reads them back and applies them ONLY once someone has saved them on the
@@ -131,6 +134,19 @@ def _trim(value, limit: int = MAX_ITEMS) -> list:
     return list(value or [])[-limit:]
 
 
+def _merge_by_time(existing: list, incoming: list, time_key: str = "time") -> list:
+    """Keep older desk candles when the bridge only posts the last ~120 bars."""
+    by: dict = {}
+    for item in list(existing or []) + list(incoming or []):
+        if not isinstance(item, dict):
+            continue
+        stamp = item.get(time_key)
+        if stamp is None or stamp == "":
+            continue
+        by[str(stamp)] = item
+    return [by[k] for k in sorted(by)]
+
+
 def _age(ts: str | None) -> float | None:
     if not ts:
         return None
@@ -174,15 +190,27 @@ def _after_session(items: list, cutoff: datetime | None, keys: tuple[str, ...] =
     return out
 
 
+def _history_floor() -> datetime:
+    raw = (os.environ.get("DESK_HISTORY_FLOOR") or "").strip()
+    if raw:
+        parsed = _parse_ts(raw)
+        if parsed is not None:
+            return parsed
+    return _DEFAULT_HISTORY_FLOOR
+
+
 def _ensure_session_clock(broker: dict) -> datetime:
-    """Keep a wipe clock forever. If missing (redeploy / fresh store), start NOW."""
-    cutoff = _parse_ts(broker.get("session_started_at"))
-    if cutoff is not None:
-        return cutoff
-    now = _now()
-    broker["session_started_at"] = now
-    broker["note"] = broker.get("note") or "session auto-started (no prior wipe clock)"
-    return _parse_ts(now) or datetime.now(timezone.utc)
+    """Pin history to DESK_HISTORY_FLOOR (default 20 Sep 2026 00:00 PKT). Never NOW / daily 9am."""
+    floor = _history_floor()
+    cur = _parse_ts(broker.get("session_started_at"))
+    floor_utc = floor.astimezone(timezone.utc)
+    cur_utc = cur.astimezone(timezone.utc) if cur is not None else None
+    if cur_utc is None or abs((cur_utc - floor_utc).total_seconds()) > 1:
+        broker["session_started_at"] = floor.isoformat()
+        broker["note"] = (
+            f"history floor {floor.isoformat()} — candles/trades from then onward only"
+        )
+    return floor
 
 
 def _session_bar_cutoff(cutoff: datetime | None) -> datetime | None:
@@ -320,6 +348,13 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                     merged_bridge = dict(broker.get("bridge") or {})
                     merged_bridge.update(body.get("bridge") or {})
                     broker[key] = merged_bridge
+                elif key == "bars":
+                    # Bridge posts only ~120 bars — merge so the desk keeps the week.
+                    broker["bars"] = _merge_by_time(broker.get("bars") or [], body.get("bars") or [])
+                elif key == "ohlc_records":
+                    broker["ohlc_records"] = _merge_by_time(
+                        broker.get("ohlc_records") or [], body.get("ohlc_records") or []
+                    )
                 else:
                     broker[key] = body[key]
         broker["positions"] = _trim(broker.get("positions"))
@@ -355,10 +390,10 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
             merged = list(by_key.values())
             broker["trades"] = merged
             broker["trade_history"] = merged
-        # Drop pre-session history the bridge re-pushes (keep current M15 open onward).
-        broker["bars"] = _trim(_after_session(broker.get("bars"), bar_cutoff), 240)
+        # Keep candles from the history floor; desk merge retains older than bridge window.
+        broker["bars"] = _trim(_after_session(broker.get("bars"), bar_cutoff), 900)
         broker["ohlc_records"] = _trim(
-            _after_session(broker.get("ohlc_records"), bar_cutoff), 500
+            _after_session(broker.get("ohlc_records"), bar_cutoff), 900
         )
         # Keep bar_history in sync so older UIs that only read bar_history still work.
         if broker.get("bars"):
@@ -386,7 +421,7 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
                         "forming": row.get("forming"),
                     }
                 )
-            broker["bars"] = _trim(synthesized, 240)
+            broker["bars"] = _trim(synthesized, 900)
             broker["bar_history"] = list(broker["bars"])
         else:
             broker["bar_history"] = []
@@ -689,16 +724,19 @@ def handle(method: str, path: str, event: dict, *, lab, model_name: str, respons
         return response(200, {"ok": True, "execution_log": broker.get("execution_log") or []})
 
     if method == "POST" and path == "/api/broker/reset":
-        # Keep live controls across reset so operators can retune without re-entry.
+        # Keep live controls. History floor stays at DESK_HISTORY_FLOOR — never NOW.
         prev_controls = dict((broker.get("controls") or _default_controls()))
         now = _now()
+        floor = _history_floor()
         store["broker_live"] = _default()
         store["broker_live"]["controls"] = prev_controls
-        store["broker_live"]["session_started_at"] = now
+        store["broker_live"]["session_started_at"] = floor.isoformat()
         store["broker_live"]["updated_at"] = now
-        store["broker_live"]["note"] = "fresh start — waiting for new MT5 heartbeats"
+        store["broker_live"]["note"] = (
+            f"desk cache cleared — history floor {floor.isoformat()} (from the 20th onward)"
+        )
         lab.save_store(model_name, store)
-        return response(200, {"ok": True, "reset": True, "session_started_at": now})
+        return response(200, {"ok": True, "reset": True, "session_started_at": floor.isoformat()})
 
     if method == "GET" and path == "/api/broker/controls":
         controls = dict(_default_controls())
